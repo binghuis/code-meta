@@ -5,6 +5,7 @@
  * 用法: tsx scripts/generate-file-manifest.ts [--out=path]
  */
 
+import "dotenv/config";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
