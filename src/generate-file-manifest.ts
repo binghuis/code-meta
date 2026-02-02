@@ -11,63 +11,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import fg from "fast-glob";
+import { loadConfig } from "./config";
 import { FileDescription } from "./type";
 
 const ROOT = process.cwd();
 
-/** 只包含这些扩展名的文件（可自行增删） */
-const ALLOWED_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".vue",
-  ".mjs",
-  ".cjs",
-];
-
-/** 排除的目录（任意层级） */
-const IGNORE_DIRS = [
-  "node_modules",
-  "dist",
-  "build",
-  "coverage",
-  ".idea",
-  ".vscode",
-  ".git",
-  ".husky",
-  ".cache",
-  "temp",
-  "public",
-  ".vite",
-  ".turbo",
-  ".next",
-  ".nuxt",
-  ".output",
-  ".pnpm-store",
-  ".yarn",
-];
-
-/** 排除的文件/模式（仅 *.config.xxx 格式的配置文件） */
-const IGNORE_FILES = [
-  "*.config.js",
-  "*.config.ts",
-  "*.config.cjs",
-  "*.config.mjs",
-];
-
-/** 构建 fast-glob 的 patterns：只匹配有效源码 */
-function buildPatterns(): string[] {
-  return ALLOWED_EXTENSIONS.map((ext) => `**/*${ext}`);
+/** 根据 config.allowedExtensions 构建 fast-glob 的 patterns */
+function buildPatterns(extensions: string[]): string[] {
+  return extensions.map((ext) => `**/*${ext}`);
 }
 
-/** 构建 fast-glob 的 ignore 列表 */
-function buildIgnore(): string[] {
-  const dirPatterns = IGNORE_DIRS.map((d) => `**/${d}/**`);
-  const filePatterns = IGNORE_FILES.map((f) =>
-    f.startsWith("**/") ? f : `**/${f}`,
-  );
-  return [...dirPatterns, ...filePatterns];
+/** 根据 config.exclude 构建 fast-glob 的 ignore 列表 */
+function buildIgnore(exclude: string[]): string[] {
+  return exclude.map((entry) => {
+    const prefix = entry.startsWith("**/") ? "" : "**/";
+    // 含 * 的视为文件模式，否则视为目录
+    const suffix = entry.includes("*") ? "" : "/**";
+    return `${prefix}${entry}${suffix}`;
+  });
 }
 
 /**
@@ -99,13 +60,24 @@ async function describeFile(filePath: string): Promise<FileDescription | null> {
 }
 
 async function main(): Promise<void> {
+  const { config } = await loadConfig();
+  const extensions = [
+    ".ts",
+    ".tsx",
+    ".vue",
+    ...(Array.isArray(config.allowedExtensions)
+      ? config.allowedExtensions
+      : []),
+  ];
+  const exclude = Array.isArray(config.exclude) ? config.exclude : [];
+
   const outArg = process.argv.find((a) => a.startsWith("--out="));
   const outPath = outArg
     ? outArg.slice("--out=".length)
     : path.join(ROOT, "file-manifest.json");
 
-  const patterns = buildPatterns();
-  const ignore = buildIgnore();
+  const patterns = buildPatterns(extensions);
+  const ignore = buildIgnore(exclude);
   const files = await fg(patterns, {
     cwd: ROOT,
     absolute: true,
