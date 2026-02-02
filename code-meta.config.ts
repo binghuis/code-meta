@@ -2,12 +2,7 @@ import type { CodeMetaConfig } from "./src/config";
 
 export default {
   // 文件过滤（exclude 使用默认，见 src/config.ts）
-  include: ["src"],
-  allowedExtensions: [".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"],
-
-  // 内容限制
-  maxContentPerFile: 2500,
-  maxTotalContent: 18000,
+  allowedExtensions: [],
 
   // API 配置（从 .env 读取）
   arkApiKey: process.env.ARK_API_KEY,

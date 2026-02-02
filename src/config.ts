@@ -4,13 +4,8 @@ import path from "node:path";
 
 export interface CodeMetaConfig {
   // 文件过滤配置
-  include?: string[];
   exclude?: string[];
   allowedExtensions?: string[];
-
-  // 分析配置
-  maxContentPerFile?: number;
-  maxTotalContent?: number;
 
   // API 配置
   arkApiKey?: string;
@@ -111,7 +106,6 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
   const gitignoreExcludes = await parseGitignore(cwd);
 
   return {
-    include: ["src"],
     exclude: [
       ...gitignoreExcludes,
       "node_modules",
@@ -137,9 +131,7 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
       "*.config.cjs",
       "*.config.mjs",
     ],
-    allowedExtensions: [".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"],
-    maxContentPerFile: 2500,
-    maxTotalContent: 18000,
+    allowedExtensions: [".ts", ".tsx", ".vue"],
     arkApiKey: process.env["ARK_API_KEY"],
     arkBaseUrl:
       process.env["ARK_BASE_URL"] || "https://ark.cn-beijing.volces.com/api/v3",
