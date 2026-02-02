@@ -1,8 +1,8 @@
 /**
  * 使用 fast-glob 遍历项目，生成扁平化文件描述 JSON。
- * 只包含有效源码：ts / tsx / js / jsx / vue / mjs / cjs 等。
+ * 扩展名与排除规则由 code-meta config 控制。
  *
- * 用法: tsx scripts/generate-file-manifest.ts [--out=path]
+ * 用法: tsx src/generate-file-manifest.ts [--out=path]
  */
 
 import "dotenv/config";
@@ -11,30 +11,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import fg from "fast-glob";
-import { loadConfig } from "./config";
+import { DEFAULT_ALLOWED_EXTENSIONS, loadConfig } from "./config";
 import { FileDescription } from "./type";
 
 const ROOT = process.cwd();
 
-/** 根据 config.allowedExtensions 构建 fast-glob 的 patterns */
 function buildPatterns(extensions: string[]): string[] {
   return extensions.map((ext) => `**/*${ext}`);
 }
 
-/** 根据 config.exclude 构建 fast-glob 的 ignore 列表 */
 function buildIgnore(exclude: string[]): string[] {
   return exclude.map((entry) => {
     const prefix = entry.startsWith("**/") ? "" : "**/";
-    // 含 * 的视为文件模式，否则视为目录
     const suffix = entry.includes("*") ? "" : "/**";
     return `${prefix}${entry}${suffix}`;
   });
 }
 
-/**
- * @param {string} filePath - 绝对路径
- * @returns {Promise<FileDescription | null>}
- */
 async function describeFile(filePath: string): Promise<FileDescription | null> {
   let stat;
   try {
@@ -51,31 +44,23 @@ async function describeFile(filePath: string): Promise<FileDescription | null> {
     return null;
   }
   const md5 = crypto.createHash("md5").update(content).digest("hex");
+  return { path: filePath, size: stat.size, md5 };
+}
 
-  return {
-    path: filePath,
-    size: stat.size,
-    md5,
-  };
+function getOutPath(): string {
+  const arg = process.argv.find((a) => a.startsWith("--out="));
+  return arg ? arg.slice(6) : path.join(ROOT, "file-manifest.json");
 }
 
 async function main(): Promise<void> {
   const { config } = await loadConfig();
-  const extensions = [
-    ".ts",
-    ".tsx",
-    ".vue",
-    ...(Array.isArray(config.allowedExtensions)
-      ? config.allowedExtensions
-      : []),
-  ];
-  const exclude = Array.isArray(config.exclude) ? config.exclude : [];
+  const extensions =
+    (config.allowedExtensions?.length ?? 0) > 0
+      ? config.allowedExtensions!
+      : [...DEFAULT_ALLOWED_EXTENSIONS];
+  const exclude = config.exclude ?? [];
 
-  const outArg = process.argv.find((a) => a.startsWith("--out="));
-  const outPath = outArg
-    ? outArg.slice("--out=".length)
-    : path.join(ROOT, "file-manifest.json");
-
+  const outPath = getOutPath();
   const patterns = buildPatterns(extensions);
   const ignore = buildIgnore(exclude);
   const files = await fg(patterns, {
@@ -93,8 +78,7 @@ async function main(): Promise<void> {
     if (desc) descriptions.push(desc);
   }
 
-  const json = JSON.stringify(descriptions, null, 2);
-  await fs.writeFile(outPath, json, "utf8");
+  await fs.writeFile(outPath, JSON.stringify(descriptions, null, 2), "utf8");
   console.log(`Wrote ${descriptions.length} entries to ${outPath}`);
 }
 

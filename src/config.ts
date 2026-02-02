@@ -3,16 +3,50 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export interface CodeMetaConfig {
-  // 文件过滤配置
   exclude?: string[];
   allowedExtensions?: string[];
-
-  // API 配置
   arkApiKey?: string;
   arkBaseUrl?: string;
   arkModel?: string;
   apiTimeout?: number;
 }
+
+/** 默认参与扫描的扩展名 */
+export const DEFAULT_ALLOWED_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".vue",
+  ".mjs",
+  ".cjs",
+] as const;
+
+/** 默认排除的目录/文件模式（不含 .gitignore 解析结果） */
+const DEFAULT_EXCLUDE = [
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".idea",
+  ".vscode",
+  ".git",
+  ".husky",
+  ".cache",
+  "temp",
+  "public",
+  ".vite",
+  ".turbo",
+  ".next",
+  ".nuxt",
+  ".output",
+  ".pnpm-store",
+  ".yarn",
+  "*.config.js",
+  "*.config.ts",
+  "*.config.cjs",
+  "*.config.mjs",
+] as const;
 
 /**
  * 读取 .gitignore 文件并解析排除规则
@@ -106,32 +140,8 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
   const gitignoreExcludes = await parseGitignore(cwd);
 
   return {
-    exclude: [
-      ...gitignoreExcludes,
-      "node_modules",
-      "dist",
-      "build",
-      "coverage",
-      ".idea",
-      ".vscode",
-      ".git",
-      ".husky",
-      ".cache",
-      "temp",
-      "public",
-      ".vite",
-      ".turbo",
-      ".next",
-      ".nuxt",
-      ".output",
-      ".pnpm-store",
-      ".yarn",
-      "*.config.js",
-      "*.config.ts",
-      "*.config.cjs",
-      "*.config.mjs",
-    ],
-    allowedExtensions: [".ts", ".tsx", ".vue"],
+    exclude: [...gitignoreExcludes, ...DEFAULT_EXCLUDE],
+    allowedExtensions: [...DEFAULT_ALLOWED_EXTENSIONS],
     arkApiKey: process.env["ARK_API_KEY"],
     arkBaseUrl:
       process.env["ARK_BASE_URL"] || "https://ark.cn-beijing.volces.com/api/v3",
