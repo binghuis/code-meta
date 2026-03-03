@@ -1,13 +1,13 @@
 # code-meta
 
-根据项目源码自动生成 **Cursor Skill 资源**（`.cursor/skills/code-meta/project-meta.json`），供 AI 按需查阅项目结构、目录职责与文件说明。
+根据项目源码自动生成 **Cursor Skill 资源**（`.cursor/skills/code-meta/index.json` 与 `by-dir/*.json` 分片），供 AI 按需查阅项目结构、目录职责与文件说明。
 
 ## 功能
 
 - **扫描**：遍历 `src`（可配置）目录，构建文件树并计算 md5 / 目录 fingerprint
 - **增量**：基于 fingerprint 只对变更目录调用 AI，节省成本
 - **分析**：自底向上用 LLM 分析每个目录，输出 summary、业务领域、场景、约定、文件说明
-- **Skill 资源**：生成单份 JSON 项目元信息文档（project-meta.json），作为 Skill 资源供 AI 使用；若目录下无 SKILL.md 则创建默认，有则不动
+- **Skill 资源**：生成轻量索引 `index.json` 与按顶层目录分片的 `by-dir/*.json`，供 AI 先查索引再按需加载；若目录下无 SKILL.md 则创建默认，有则不动
 - **人工覆写**：通过 `.code-meta/overrides.yaml` 修正或补充 AI 描述
 - **Feature Map**：按功能跨目录聚合，结果写入同一 JSON 的 features 段
 
@@ -34,7 +34,7 @@ npx code-meta src/modules/payment
 # 只分析目录深度 ≤ N 层
 npx code-meta --depth=2
 
-# 仅从缓存重新生成 project-meta.json，不调用 API（适合新人或改模板后）
+# 仅从缓存重新生成 index.json 与 by-dir 分片，不调用 API（适合新人或改模板后）
 npx code-meta --emit-only
 
 # 忽略缓存，全量重新分析
@@ -60,7 +60,8 @@ module.exports = {
   },
   skill: {
     outputDir: ".cursor/skills/code-meta",
-    metaFileName: "project-meta.json",
+    indexFileName: "index.json",
+    dirShardDir: "by-dir",
   },
   features: {
     payment: {
@@ -86,13 +87,13 @@ src/legacy/payment:
 
 ## 产出与缓存
 
-- **Skill 资源**：`.cursor/skills/code-meta/project-meta.json`（结构化项目元信息）；同目录下若无 `SKILL.md` 则自动创建默认，有则不动（建议将 `project-meta.json` 或整目录加入 `.gitignore`，由本地或 CI 生成）
+- **Skill 资源**：`.cursor/skills/code-meta/index.json`（轻量索引）+ `by-dir/*.json`（按顶层目录分片的元信息）；同目录下若无 `SKILL.md` 则自动创建默认，有则不动（建议将该目录加入 `.gitignore`，由本地或 CI 生成）
 - **缓存**：`.code-meta/cache.json`（可提交到 Git，便于团队共享；新人 `npx code-meta --emit-only` 即可生成元信息，无需 API）
 
 ## 与 Cursor 集成
 
-1. 在项目根执行 `npx code-meta` 生成 project-meta.json。
-2. 将 `.cursor/skills/code-meta` 作为 Skill 使用；AI 在需要理解项目结构时查阅同目录下的 `project-meta.json`。
+1. 在项目根执行 `npx code-meta` 生成 index.json 与 by-dir 分片。
+2. 将 `.cursor/skills/code-meta` 作为 Skill 使用；AI 先查阅 `index.json`，再按需查阅 `by-dir/<模块>.json`。
 
 ## 集成到工作流
 

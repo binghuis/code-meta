@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * code-meta CLI: scan, analyze, emit Skill 资源（project-meta.json）.
+ * code-meta CLI: scan, analyze, emit Skill 资源（index.json + by-dir 分片）.
  */
 
 import "dotenv/config";
@@ -14,12 +14,12 @@ const pkg: { version?: string } = require(
 
 const USAGE = `code-meta [path] [options]
 
-  根据源码生成 Cursor Skill 资源（project-meta.json），供 AI 理解项目结构、目录与文件职责。
+  根据源码生成 Cursor Skill 资源（index.json 与 by-dir 分片），供 AI 理解项目结构、目录与文件职责。
 
 Commands / Options:
   [path]           可选，仅分析该路径下目录（如 src/modules/payment）
   --dry-run         仅扫描与 diff，显示将要分析的目录与预估 token，不调用 API
-  --emit-only       仅从缓存重新生成 project-meta.json，不调用 API
+  --emit-only       仅从缓存重新生成 index.json 与 by-dir 分片，不调用 API
   --force           忽略缓存，全量重新分析
   --depth=N         仅分析目录深度不超过 N 层（从项目根算）
   -h, --help        显示帮助

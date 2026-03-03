@@ -1,6 +1,6 @@
 /**
  * 端到端测试：在 fixture 项目上跑完整 pipeline（scan -> diff -> analyze -> emit），
- * 断言 project-meta.json 与 SKILL.md。需要配置 ARK_API_KEY（豆包）且先 npm run build。
+ * 断言 index.json、by-dir 分片与 SKILL.md。需要配置 ARK_API_KEY（豆包）且先 npm run build。
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
@@ -74,34 +74,41 @@ describe("e2e", () => {
 
     const absE2eDir = path.resolve(e2eProjectDir);
     const skillDir = path.join(absE2eDir, ".cursor", "skills", "code-meta");
-    const metaPath = path.join(skillDir, "project-meta.json");
+    const indexPath = path.join(skillDir, "index.json");
+    const byDirPath = path.join(skillDir, "by-dir");
     console.log("\n[E2E] 测试项目目录:", absE2eDir);
-    console.log("[E2E] 产物:", metaPath, path.join(skillDir, "SKILL.md"), "\n");
+    console.log("[E2E] 产物:", indexPath, byDirPath, path.join(skillDir, "SKILL.md"), "\n");
 
-    const cacheRaw = await fs.readFile(metaPath, "utf8");
-    const meta = JSON.parse(cacheRaw) as {
+    const indexRaw = await fs.readFile(indexPath, "utf8");
+    const index = JSON.parse(indexRaw) as {
       generatedAt: string;
-      directories: Record<
-        string,
-        { summary: string; files: Array<{ path: string }> }
-      >;
+      directories: Record<string, { summary: string; shard: string }>;
     };
-    expect(meta.generatedAt).toBeDefined();
-    const dirKeys = Object.keys(meta.directories);
+    expect(index.generatedAt).toBeDefined();
+    const dirKeys = Object.keys(index.directories);
     expect(dirKeys.length, "至少应分析 1 个目录").toBeGreaterThanOrEqual(1);
 
     for (const dirPath of dirKeys) {
-      const entry = meta.directories[dirPath];
+      const entry = index.directories[dirPath];
       expect(entry).toBeDefined();
       expect(typeof entry!.summary).toBe("string");
-      expect(Array.isArray(entry!.files)).toBe(true);
-      for (const f of entry!.files) {
-        expect(f.path).toBeDefined();
-      }
+      expect(typeof entry!.shard).toBe("string");
+    }
+
+    const firstDir = dirKeys[0]!;
+    const shardName = index.directories[firstDir]!.shard;
+    const shardPath = path.join(byDirPath, shardName);
+    const shardRaw = await fs.readFile(shardPath, "utf8");
+    const shard = JSON.parse(shardRaw) as Record<string, { summary: string; files: Array<{ path: string }> }>;
+    expect(shard[firstDir]).toBeDefined();
+    expect(typeof shard[firstDir]!.summary).toBe("string");
+    expect(Array.isArray(shard[firstDir]!.files)).toBe(true);
+    for (const f of shard[firstDir]!.files) {
+      expect(f.path).toBeDefined();
     }
 
     const skillMdPath = path.join(skillDir, "SKILL.md");
     const skillMd = await fs.readFile(skillMdPath, "utf8");
-    expect(skillMd).toContain("project-meta.json");
+    expect(skillMd).toContain("index.json");
   }, 120000);
 });

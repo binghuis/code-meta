@@ -107,7 +107,8 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
 
   const skill: SkillConfig = {
     outputDir: ".cursor/skills/code-meta",
-    metaFileName: "project-meta.json",
+    indexFileName: "index.json",
+    dirShardDir: "by-dir",
   };
 
   return {

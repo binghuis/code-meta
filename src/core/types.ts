@@ -111,22 +111,28 @@ export interface FeatureConfig {
   description?: string;
 }
 
-/** Skill output options: where to write project-meta.json and SKILL.md. */
+/** Skill output options: index.json + by-dir shards and SKILL.md. */
 export interface SkillConfig {
   outputDir?: string;
-  metaFileName?: string;
+  /** Index file name (default "index.json"). */
+  indexFileName?: string;
+  /** Directory for per-top-level shard files (default "by-dir"). */
+  dirShardDir?: string;
 }
 
-/** One directory entry in project-meta.json (simplified). */
+/** One directory entry in a shard (full detail). */
 export interface ProjectMetaDirEntry {
   summary: string;
   files: Array<{ path: string; purpose: string; exports: string[] }>;
 }
 
-/** Root structure of project-meta.json (Skill resource). */
-export interface ProjectMeta {
+/** Shard file content: dirPath -> full entry for one top-level segment. */
+export type ProjectMetaShard = Record<string, ProjectMetaDirEntry>;
+
+/** Lightweight index: dirPath -> summary + shard filename; consumed first, then load by-dir/{shard}. */
+export interface ProjectMetaIndex {
   generatedAt: string;
-  directories: Record<string, ProjectMetaDirEntry>;
+  directories: Record<string, { summary: string; shard: string }>;
   features?: Record<string, { description: string; globs: string[]; body: string }>;
 }
 
