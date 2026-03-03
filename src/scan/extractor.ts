@@ -4,7 +4,11 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Project } from "ts-morph";
 import { ROOT } from "../core/constants";
+
+const tsMorphProject = new Project({ useInMemoryFileSystem: true });
+let extractFileCounter = 0;
 
 export interface ExtractedFile {
   name: string;
@@ -42,52 +46,33 @@ function extractLeadingComment(content: string): string {
 }
 
 function extractExportsAndSignatures(content: string, budget: number): string {
-  const lines = content.split("\n");
-  const out: string[] = [];
-  let count = 0;
-  let inExport = false;
-  let braceDepth = 0;
-  for (const line of lines) {
-    if (count >= budget) break;
-    const trimmed = line.trim();
-    if (
-      trimmed.startsWith("export ") ||
-      trimmed.startsWith("export type ") ||
-      trimmed.startsWith("export interface ") ||
-      trimmed.startsWith("export enum ")
-    ) {
-      inExport = true;
-      braceDepth = 0;
-      const openBraces = (line.match(/{/g) ?? []).length;
-      const closeBraces = (line.match(/}/g) ?? []).length;
-      braceDepth += openBraces - closeBraces;
-      out.push(line);
-      count += line.length + 1;
-      if (braceDepth <= 0) inExport = false;
-      continue;
+  if (budget <= 0) return content.slice(0, budget);
+  const virtualName = `_extract_${++extractFileCounter}.ts`;
+  try {
+    const sourceFile = tsMorphProject.createSourceFile(virtualName, content, {
+      overwrite: true,
+    });
+    const exported = sourceFile.getExportedDeclarations();
+    const seen = new Set<unknown>();
+    const parts: string[] = [];
+    let total = 0;
+    for (const decls of exported.values()) {
+      for (const d of decls) {
+        if (seen.has(d)) continue;
+        seen.add(d);
+        const text = d.getText();
+        if (total + text.length + 1 > budget) break;
+        parts.push(text);
+        total += text.length + 1;
+      }
+      if (total >= budget) break;
     }
-    if (inExport) {
-      out.push(line);
-      count += line.length + 1;
-      const openBraces = (line.match(/{/g) ?? []).length;
-      const closeBraces = (line.match(/}/g) ?? []).length;
-      braceDepth += openBraces - closeBraces;
-      if (braceDepth <= 0) inExport = false;
-      continue;
-    }
-    if (
-      (trimmed.startsWith("interface ") ||
-        trimmed.startsWith("type ") ||
-        trimmed.startsWith("function ") ||
-        trimmed.startsWith("const ") ||
-        trimmed.startsWith("class ")) &&
-      (trimmed.includes("export") || out.length === 0)
-    ) {
-      out.push(line);
-      count += line.length + 1;
-    }
+    const result = parts.join("\n").slice(0, budget);
+    tsMorphProject.removeSourceFile(sourceFile);
+    return result || content.slice(0, budget);
+  } catch {
+    return content.slice(0, budget);
   }
-  return out.join("\n").slice(0, budget) || content.slice(0, budget);
 }
 
 export async function extractFileContent(

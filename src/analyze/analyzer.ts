@@ -11,66 +11,14 @@ import type {
   DirNode,
 } from "../core/types";
 import { consola } from "consola";
+import pLimit from "p-limit";
 import { chat, extractJsonFromModelResponse, type ChatMessage } from "../provider";
 import { extractDirectoryContents } from "../scan/extractor";
 import * as cache from "../data/cache";
-
-const DIR_ANALYSIS_SCHEMA = {
-  type: "object",
-  properties: {
-    summary: {
-      type: "string",
-      description: "一段话概括该目录的职责、功能、作用，中文",
-    },
-    businessDomain: {
-      type: "string",
-      description: "所属业务领域，如「用户系统」「支付」「通用基础设施」",
-    },
-    scenarios: {
-      type: "array",
-      items: { type: "string" },
-      description: "使用场景列表，中文",
-    },
-    conventions: {
-      type: "array",
-      items: { type: "string" },
-      description: "观察到的编码约定",
-    },
-    files: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          purpose: { type: "string", description: "文件职责，一句话" },
-          exports: {
-            type: "array",
-            items: { type: "string" },
-            description: "关键导出名",
-          },
-        },
-        required: ["name", "purpose", "exports"],
-        additionalProperties: false,
-      },
-      description: "该目录下直接文件列表",
-    },
-    subdirs: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          summary: { type: "string", description: "一句话概括子目录" },
-        },
-        required: ["name", "summary"],
-        additionalProperties: false,
-      },
-      description: "直接子目录列表",
-    },
-  },
-  required: ["summary", "businessDomain", "scenarios", "conventions", "files", "subdirs"],
-  additionalProperties: false,
-};
+import {
+  getDirAnalysisJsonSchema,
+  DirAnalysisSchema,
+} from "./schema";
 
 function trivialAnalysis(dirPath: string, node: DirNode): DirAnalysis {
   const fileNames = node.children
@@ -118,14 +66,6 @@ function groupByDepthDesc(paths: string[]): string[][] {
   return [...byDepth.keys()]
     .sort((a, b) => b - a)
     .map((depth) => byDepth.get(depth)!);
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
 }
 
 async function analyzeOneDirectory(
@@ -184,13 +124,14 @@ ${childSummaries.length ? "子目录摘要：\n" + childSummaries.join("\n") + "
         type: "json_schema",
         json_schema: {
           name: "dir_analysis",
-          schema: DIR_ANALYSIS_SCHEMA,
+          schema: getDirAnalysisJsonSchema(),
           strict: true,
         },
       },
     });
     const jsonStr = extractJsonFromModelResponse(raw);
-    return JSON.parse(jsonStr) as DirAnalysis;
+    const parsed = JSON.parse(jsonStr) as unknown;
+    return DirAnalysisSchema.parse(parsed) as DirAnalysis;
   } catch (err) {
     consola.warn(
       `分析目录失败 [${dirPath}]，本次跳过缓存写入:`,
@@ -215,34 +156,39 @@ export async function runAnalyze(ctx: AnalyzeContext): Promise<CacheData> {
   let currentCache = cacheData;
   const failedDirs: string[] = [];
   let progress = 0;
+  const limit = pLimit(ANALYZE_BATCH_SIZE);
 
   for (const layer of layers) {
-    for (const batch of chunk(layer, ANALYZE_BATCH_SIZE)) {
-      const snapshot = currentCache;
-      const analyzed = await Promise.all(
-        batch.map(async (dirPath) => {
+    const analyzed = await Promise.all(
+      layer.map((dirPath) =>
+        limit(async () => {
           progress++;
           onProgress?.(progress, ordered.length, dirPath);
           const node = scanDirMap.get(dirPath);
           if (!node) return null;
-          const analysis = await analyzeOneDirectory(dirPath, node, config, snapshot);
+          const analysis = await analyzeOneDirectory(
+            dirPath,
+            node,
+            config,
+            currentCache,
+          );
           if (!analysis) {
             failedDirs.push(dirPath);
             return null;
           }
           return { dirPath, node, analysis } as const;
         }),
-      );
+      ),
+    );
 
-      for (const item of analyzed) {
-        if (!item) continue;
-        currentCache = cache.updateCacheWithAnalysis(
-          currentCache,
-          item.dirPath,
-          item.node,
-          item.analysis,
-        );
-      }
+    for (const item of analyzed) {
+      if (!item) continue;
+      currentCache = cache.updateCacheWithAnalysis(
+        currentCache,
+        item.dirPath,
+        item.node,
+        item.analysis,
+      );
     }
   }
 

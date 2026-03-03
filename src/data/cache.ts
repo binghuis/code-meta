@@ -31,9 +31,11 @@ export async function readCache(): Promise<CacheData | null> {
 export async function writeCache(data: CacheData): Promise<void> {
   const cachePath = getCachePath();
   const dir = path.dirname(cachePath);
+  const tmpPath = path.join(dir, `${CACHE_FILE}.tmp`);
   await fs.mkdir(dir, { recursive: true });
   const payload = { ...data, updatedAt: new Date().toISOString() };
-  await fs.writeFile(cachePath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(tmpPath, cachePath);
 }
 
 function filesFromNode(

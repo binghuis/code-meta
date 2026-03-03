@@ -46,7 +46,6 @@ export interface DiffResult {
   toAnalyze: string[];
   toSkip: string[];
   toDelete: string[];
-  dirDiffs: Map<string, DirDiff>;
 }
 
 /** Single file entry in AI analysis output. */
@@ -133,7 +132,7 @@ export type ProjectMetaShard = Record<string, ProjectMetaDirEntry>;
 export interface ProjectMetaIndex {
   generatedAt: string;
   directories: Record<string, { summary: string; shard: string }>;
-  features?: Record<string, { description: string; globs: string[]; body: string }>;
+  features?: Record<string, FeatureRuleContent>;
 }
 
 /** Full code-meta configuration. */

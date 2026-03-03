@@ -47,6 +47,7 @@ export async function runPipeline(
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
   const { config } = await loadConfig();
+  const overrides = await loadOverrides();
   const {
     targetPath,
     depth,
@@ -61,12 +62,10 @@ export async function runPipeline(
     if (!cacheData) {
       return { emitOnly: true };
     }
-    const overrides = await loadOverrides();
     await emit({
       config,
       cacheData,
       overrides,
-      dirsToDelete: [],
     });
     return { cacheData, emitOnly: true };
   }
@@ -129,12 +128,10 @@ export async function runPipeline(
   } else if (diffResult.toAnalyze.length > 0 && !config.provider.apiKey) {
     consola.warn("检测到代码变更但未配置 API Key，已跳过元信息生成以避免产出过期内容。");
     if (cacheData && diffResult.toDelete.length > 0) {
-      const overrides = await loadOverrides();
       await emit({
         config,
         cacheData,
         overrides,
-        dirsToDelete: diffResult.toDelete,
       });
       await writeCache(cacheData);
     }
@@ -149,12 +146,10 @@ export async function runPipeline(
   }
 
   if (cacheData) {
-    const overrides = await loadOverrides();
     await emit({
       config,
       cacheData,
       overrides,
-      dirsToDelete: diffResult.toDelete,
     });
 
     if (diffResult.toDelete.length > 0) {

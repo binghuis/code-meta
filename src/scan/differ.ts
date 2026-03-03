@@ -93,6 +93,5 @@ export function diff(
     toAnalyze: [...new Set(toAnalyze)],
     toSkip,
     toDelete,
-    dirDiffs,
   };
 }

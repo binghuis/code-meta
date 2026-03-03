@@ -6,7 +6,8 @@ export default defineConfig({
   sourcemap: false,
   clean: true,
   dts: true,
-  format: ["cjs"],
+  format: ["esm"],
+  target: "es2020",
   minify: "terser",
   treeshake: true,
 });

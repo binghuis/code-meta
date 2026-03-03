@@ -36,6 +36,7 @@ export function mergeOverride(analysis: DirAnalysis, override: OverrideEntry): D
   if (override.files != null && override.files.length > 0) {
     const byName = new Map(result.files.map((f) => [f.name, { ...f }]));
     for (const o of override.files) {
+      if (o.name == null || o.name === "") continue;
       const existing = byName.get(o.name);
       if (existing) {
         if (o.purpose != null) existing.purpose = o.purpose;
@@ -56,7 +57,7 @@ export function mergeOverride(analysis: DirAnalysis, override: OverrideEntry): D
     for (const o of override.subdirs) {
       const existing = byName.get(o.name);
       if (existing && o.summary != null) existing.summary = o.summary;
-      else if (o.name != null)
+      else if (o.name != null && o.name !== "")
         byName.set(o.name, { name: o.name, summary: o.summary ?? "" });
     }
     result.subdirs = [...byName.values()];

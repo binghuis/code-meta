@@ -79,7 +79,6 @@ export interface EmitOptions {
   config: CodeMetaConfig;
   cacheData: CacheData;
   overrides: OverridesMap;
-  dirsToDelete: string[];
 }
 
 export async function emit(options: EmitOptions): Promise<void> {

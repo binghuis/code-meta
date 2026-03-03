@@ -1,10 +1,10 @@
 /**
- * Configuration loading: code-meta.config.* + .gitignore parsing.
+ * Configuration loading: code-meta.config.* (incl. .ts) + .code-metarc via c12.
  */
 
 import type { CodeMetaConfig, ProviderConfig, SkillConfig } from "./types";
 import { consola } from "consola";
-import JoyCon from "joycon";
+import { loadConfig as loadC12 } from "c12";
 
 export type { CodeMetaConfig, ProviderConfig, SkillConfig } from "./types";
 
@@ -45,49 +45,41 @@ const DEFAULT_EXCLUDE = [
   "*.config.mjs",
 ] as const;
 
-function createConfigLoader() {
-  return new JoyCon({
-    files: [
-      "code-meta.config.js",
-      "code-meta.config.json",
-      ".code-metarc",
-      ".code-metarc.json",
-    ],
-    cwd: process.cwd(),
-  });
-}
-
 export interface LoadConfigResult {
   config: CodeMetaConfig;
   configPath: string | null;
 }
 
 export async function loadConfig(): Promise<LoadConfigResult> {
-  const joycon = createConfigLoader();
-  const defaultConfig = await getDefaultConfig();
-
   try {
-    const result = await joycon.load();
-    if (result && result.data) {
-      const user = (result.data || {}) as Partial<CodeMetaConfig>;
-      const config: CodeMetaConfig = {
+    // c12 loads .env when dotenv: true; do this first so getDefaultConfig() sees env vars
+    const result = await loadC12({
+      name: "code-meta",
+      cwd: process.cwd(),
+      dotenv: true,
+    });
+    const defaultConfig = await getDefaultConfig();
+    const config = (result.config ?? {}) as Partial<CodeMetaConfig>;
+    if (result.configFile && Object.keys(config).length > 0) {
+      const merged: CodeMetaConfig = {
         ...defaultConfig,
-        ...user,
-        include: user.include ?? defaultConfig.include,
+        ...config,
+        include: config.include ?? defaultConfig.include,
         provider: {
           ...defaultConfig.provider,
-          ...(user.provider ?? {}),
+          ...(config.provider ?? {}),
         },
-        skill: user.skill
-          ? { ...defaultConfig.skill, ...user.skill }
+        skill: config.skill
+          ? { ...defaultConfig.skill, ...config.skill }
           : defaultConfig.skill,
-        features: user.features ?? defaultConfig.features,
+        features: config.features ?? defaultConfig.features,
       };
-      return { config, configPath: result.path ?? null };
+      return { config: merged, configPath: result.configFile };
     }
     return { config: defaultConfig, configPath: null };
   } catch (error) {
     consola.warn("Failed to load config file, using defaults:", error);
+    const defaultConfig = await getDefaultConfig();
     return { config: defaultConfig, configPath: null };
   }
 }

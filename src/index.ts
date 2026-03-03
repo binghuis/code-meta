@@ -7,10 +7,11 @@ export type {
   CodeMetaConfig,
   DirAnalysis,
   DiffResult,
+  FeatureRuleContent,
   PipelineOptions,
   ScanResult,
 } from "./core/types";
-export { loadConfig, getDefaultConfig, DEFAULT_ALLOWED_EXTENSIONS } from "./core/config";
+export { loadConfig } from "./core/config";
 export type { LoadConfigResult } from "./core/config";
 export { runPipeline } from "./pipeline";
 export type { PipelineResult } from "./pipeline";
@@ -23,6 +24,5 @@ export { loadOverrides, getMergedAnalysis } from "./data/overrides";
 export { emit } from "./emit/emitter";
 export type { EmitOptions } from "./emit/emitter";
 export { analyzeFeatures } from "./analyze/features";
-export type { FeatureRuleContent } from "./analyze/features";
 export { chat, estimateTokens } from "./provider";
 export type { ChatMessage, ChatOptions } from "./provider";

@@ -3,88 +3,46 @@
  * code-meta CLI: scan, analyze, emit Skill 资源（index.json + by-dir 分片）.
  */
 
-import "dotenv/config";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import cac from "cac";
 import { consola } from "consola";
 import { runPipeline } from "./pipeline";
 
-const pkg: { version?: string } = require(
-  path.join(__dirname, "..", "package.json"),
-);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+) as { version?: string };
 
-const USAGE = `code-meta [path] [options]
+const cli = cac("code-meta").version(pkg.version ?? "1.0.0");
+cli
+  .option("--dry-run", "仅扫描与 diff，显示将要分析的目录与预估 token，不调用 API")
+  .option("--emit-only", "仅从缓存重新生成 index.json 与 by-dir 分片，不调用 API")
+  .option("--force", "忽略缓存，全量重新分析")
+  .option("--depth <n>", "仅分析目录深度不超过 N 层（从项目根算）")
+  .help();
 
-  根据源码生成 Cursor Skill 资源（index.json 与 by-dir 分片），供 AI 理解项目结构、目录与文件职责。
-
-Commands / Options:
-  [path]           可选，仅分析该路径下目录（如 src/modules/payment）
-  --dry-run         仅扫描与 diff，显示将要分析的目录与预估 token，不调用 API
-  --emit-only       仅从缓存重新生成 index.json 与 by-dir 分片，不调用 API
-  --force           忽略缓存，全量重新分析
-  --depth=N         仅分析目录深度不超过 N 层（从项目根算）
-  -h, --help        显示帮助
-  -v, --version     显示版本
-
-Examples:
-  npx code-meta
-  npx code-meta --dry-run
-  npx code-meta src/modules/payment
-  npx code-meta --depth=2
-  npx code-meta --emit-only
-`;
-
-export function parseArgs(argv: string[]): {
-  targetPath?: string;
-  depth?: number;
-  dryRun: boolean;
-  emitOnly: boolean;
-  force: boolean;
-  help: boolean;
-  version: boolean;
-} {
-  const args = argv.slice(2);
-  let targetPath: string | undefined;
-  let depth: number | undefined;
-  let dryRun = false;
-  let emitOnly = false;
-  let force = false;
-  let help = false;
-  let version = false;
-
-  for (const a of args) {
-    if (a === "-h" || a === "--help") help = true;
-    else if (a === "-v" || a === "--version") version = true;
-    else if (a === "--dry-run") dryRun = true;
-    else if (a === "--emit-only") emitOnly = true;
-    else if (a === "--force") force = true;
-    else if (a.startsWith("--depth=")) {
-      const n = parseInt(a.slice(8), 10);
-      if (!Number.isNaN(n)) depth = n;
-    } else if (!a.startsWith("-")) targetPath = a;
-  }
-
-  return { targetPath, depth, dryRun, emitOnly, force, help, version };
-}
-
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv);
-
-  if (args.help) {
-    consola.log(USAGE);
-    process.exit(0);
-  }
-
-  if (args.version) {
-    consola.log(pkg.version ?? "1.0.0");
-    process.exit(0);
-  }
+async function runMain(
+  targetPath: string | undefined,
+  options: {
+    dryRun?: boolean;
+    emitOnly?: boolean;
+    force?: boolean;
+    depth?: string | number;
+  },
+): Promise<void> {
+  const depth =
+    options.depth != null
+      ? typeof options.depth === "string"
+        ? parseInt(options.depth, 10)
+        : options.depth
+      : undefined;
 
   try {
-    if (args.emitOnly) {
+    if (options.emitOnly) {
       consola.info("Emit only: 从缓存生成项目元信息...");
-      const result = await runPipeline({
-        emitOnly: true,
-      });
+      const result = await runPipeline({ emitOnly: true });
       if (!result.cacheData) {
         consola.warn("未找到缓存，请先运行一次 code-meta 进行分析。");
         process.exit(1);
@@ -93,11 +51,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (args.dryRun) {
+    if (options.dryRun) {
       consola.info("Dry run: 扫描与 diff...");
       const result = await runPipeline({
-        targetPath: args.targetPath,
-        depth: args.depth,
+        targetPath,
+        depth: Number.isNaN(depth as number) ? undefined : (depth as number),
         dryRun: true,
       });
       if (!result.scanResult || !result.diffResult) {
@@ -127,9 +85,9 @@ async function main(): Promise<void> {
 
     consola.info("运行 code-meta 流水线...");
     const result = await runPipeline({
-      targetPath: args.targetPath,
-      depth: args.depth,
-      force: args.force,
+      targetPath,
+      depth: Number.isNaN(depth as number) ? undefined : (depth as number),
+      force: options.force ?? false,
       onProgress: (current, total, dirPath) => {
         consola.log(`  [${current}/${total}] ${dirPath}`);
       },
@@ -153,4 +111,5 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+const { args, options } = cli.parse();
+void runMain(args[0], options as Parameters<typeof runMain>[1]);

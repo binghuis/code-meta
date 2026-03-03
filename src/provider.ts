@@ -2,7 +2,31 @@
  * OpenAI-compatible LLM chat client with timeout and token estimation.
  */
 
+import OpenAI, {
+  type APIError,
+  AuthenticationError,
+  NotFoundError,
+  APIConnectionTimeoutError,
+  APIUserAbortError,
+} from "openai";
 import type { ProviderConfig } from "./core/types";
+
+const clientCache = new Map<string, OpenAI>();
+
+function getClient(config: ProviderConfig): OpenAI {
+  const key = `${config.baseUrl}:${config.apiKey}:${config.timeout ?? 90000}`;
+  let client = clientCache.get(key);
+  if (!client) {
+    client = new OpenAI({
+      baseURL: config.baseUrl.replace(/\/$/, "") + "/",
+      apiKey: config.apiKey,
+      timeout: config.timeout ?? 90000,
+      maxRetries: 2,
+    });
+    clientCache.set(key, client);
+  }
+  return client;
+}
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -26,16 +50,23 @@ export function estimateTokens(text: string): number {
   return Math.ceil(chinese / 2 + other / 4);
 }
 
-const RETRY_BACKOFF_MS = [1000, 3000];
-const MAX_RETRIES = 2;
-
-function isRetryable(status: number): boolean {
-  return status === 429 || status >= 500;
-}
-
-function isRetryableNetworkError(e: unknown): boolean {
-  if (e instanceof Error && e.name === "AbortError") return false;
-  return true;
+function mapApiError(e: unknown): Error {
+  if (e instanceof AuthenticationError) {
+    return new Error("API key 无效或未配置，请检查 provider.apiKey 或环境变量。");
+  }
+  if (e instanceof NotFoundError) {
+    const err = e as APIError;
+    const body = err.error as { message?: string } | undefined;
+    const msg = body?.message ?? "";
+    if (/ModelNotOpen|model.*not.*activated/i.test(String(msg))) {
+      return new Error("当前 model 未开通或配置错误。请在对应控制台创建推理接入点。");
+    }
+  }
+  if (e instanceof APIConnectionTimeoutError || e instanceof APIUserAbortError) {
+    return new Error("请求超时，请检查网络或增大 provider.timeout。");
+  }
+  if (e instanceof Error) return e;
+  return new Error(String(e));
 }
 
 export async function chat(
@@ -43,74 +74,35 @@ export async function chat(
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<string> {
-  const { baseUrl, apiKey, model, timeout = 90000 } = config;
-  const url = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
-  const body: Record<string, unknown> = {
-    model,
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    temperature: options.temperature ?? 0.2,
-  };
-  if (options.responseFormat) {
-    body["response_format"] = options.responseFormat;
-  }
+  const { model } = config;
+  const client = getClient(config);
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
+  try {
+    const body: Parameters<OpenAI["chat"]["completions"]["create"]>[0] = {
+      model,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      temperature: options.temperature ?? 0.2,
+    };
+    if (options.responseFormat) {
+      body.response_format = {
+        type: "json_schema",
+        json_schema: {
+          name: options.responseFormat.json_schema.name,
+          schema: options.responseFormat.json_schema.schema as Record<string, unknown>,
+          strict: options.responseFormat.json_schema.strict,
         },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (!res.ok) {
-        const errText = await res.text();
-        const retryable = isRetryable(res.status);
-        let msg = `API ${res.status}: ${errText}`;
-        if (res.status === 401) {
-          msg = "API key 无效或未配置，请检查 provider.apiKey 或环境变量。";
-        } else if (
-          res.status === 404 &&
-          /ModelNotOpen|model.*not.*activated/i.test(errText)
-        ) {
-          msg = "当前 model 未开通或配置错误。请在对应控制台创建推理接入点。";
-        }
-        const err = new Error(msg);
-        if (retryable && attempt < MAX_RETRIES) {
-          lastError = err;
-          await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[attempt]!));
-          continue;
-        }
-        throw err;
-      }
-
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
       };
-      const text = data.choices?.[0]?.message?.content?.trim();
-      if (text == null) throw new Error("API 返回内容为空");
-      return text;
-    } catch (e) {
-      clearTimeout(timer);
-      if (e instanceof Error && e.name === "AbortError") {
-        throw new Error(`请求超时（${timeout}ms）`);
-      }
-      if (isRetryableNetworkError(e) && attempt < MAX_RETRIES) {
-        lastError = e instanceof Error ? e : new Error(String(e));
-        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[attempt]!));
-        continue;
-      }
-      throw e;
     }
+    const completion = await client.chat.completions.create(body);
+    const text =
+      "choices" in completion
+        ? completion.choices[0]?.message?.content?.trim()
+        : undefined;
+    if (text == null) throw new Error("API 返回内容为空");
+    return text;
+  } catch (e) {
+    throw mapApiError(e);
   }
-  throw lastError ?? new Error("API 请求失败");
 }
 
 /** 从模型返回中提取 JSON 字符串（兼容 ```json ... ``` 或 ``` ... ``` 包裹） */

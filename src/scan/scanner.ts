@@ -11,10 +11,10 @@ import type {
 } from "../core/types";
 import { consola } from "consola";
 import crypto from "node:crypto";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
+import ig from "ignore";
 import { ROOT } from "../core/constants";
 const TRIVIAL_LINE_THRESHOLD = 20;
 const BARREL_NAMES = new Set([
@@ -45,41 +45,6 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
-interface GitignoreRule {
-  pattern: string;
-  negate: boolean;
-}
-
-function toGitignoreRulePatterns(rawLine: string): GitignoreRule[] {
-  const trimmed = rawLine.trim();
-  if (!trimmed || trimmed.startsWith("#")) return [];
-
-  const negate = trimmed.startsWith("!");
-  const line = (negate ? trimmed.slice(1) : trimmed).replace(/\/$/, "");
-  if (!line) return [];
-
-  const anchored = line.startsWith("/");
-  const body = anchored ? line.slice(1) : line;
-  const hasSlash = body.includes("/");
-  const hasGlob = /[*?[\]{}]/.test(body);
-  const maybeDir = !hasGlob && !path.extname(body);
-
-  const patterns = (() => {
-    if (anchored) {
-      if (maybeDir) return [body, `${body}/**`];
-      return [body];
-    }
-    if (hasSlash) {
-      if (maybeDir) return [`**/${body}`, `**/${body}/**`];
-      return [`**/${body}`];
-    }
-    if (maybeDir) return [`**/${body}`, `**/${body}/**`];
-    return [`**/${body}`];
-  })();
-
-  return patterns.map((pattern) => ({ pattern, negate }));
-}
-
 async function applyGitignoreRules(rawFiles: string[]): Promise<string[]> {
   const gitignorePath = path.join(ROOT, ".gitignore");
   let content: string;
@@ -88,30 +53,8 @@ async function applyGitignoreRules(rawFiles: string[]): Promise<string[]> {
   } catch {
     return rawFiles;
   }
-
-  const rules = content
-    .split("\n")
-    .flatMap((line) => toGitignoreRulePatterns(line));
-  if (rules.length === 0 || rawFiles.length === 0) return rawFiles;
-
-  const universe = new Set(rawFiles);
-  const selected = new Set(rawFiles);
-  for (const rule of rules) {
-    const matched = await fg([rule.pattern], {
-      cwd: ROOT,
-      onlyFiles: true,
-      absolute: false,
-      dot: true,
-      followSymbolicLinks: false,
-    });
-    for (const rel of matched.map(normalizePath)) {
-      if (!universe.has(rel)) continue;
-      if (rule.negate) selected.add(rel);
-      else selected.delete(rel);
-    }
-  }
-
-  return rawFiles.filter((f) => selected.has(f));
+  const filter = ig().add(content);
+  return rawFiles.filter((f) => !filter.ignores(f));
 }
 
 const MD5_BATCH_SIZE = 50;
@@ -149,21 +92,13 @@ async function fileMd5SizeAndLines(
         mtimeMs: fallback.mtimeMs,
       };
     }
-    const hash = crypto.createHash("md5");
-    let newlineCount = 0;
-    await new Promise<void>((resolve, reject) => {
-      const stream = createReadStream(absPath);
-      stream.on("data", (chunk: Buffer) => {
-        hash.update(chunk);
-        for (let i = 0; i < chunk.length; i++) {
-          if (chunk[i] === 10) newlineCount++;
-        }
-      });
-      stream.on("error", reject);
-      stream.on("end", resolve);
-    });
-    const md5 = hash.digest("hex");
-    const lines = newlineCount + 1;
+    const buf = await fs.readFile(absPath);
+    const md5 = crypto.createHash("md5").update(buf).digest("hex");
+    let lines = 0;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] === 10) lines++;
+    }
+    lines += 1;
     return { md5, size: stat.size, lines, mtimeMs: stat.mtimeMs };
   } catch (err) {
     consola.warn(

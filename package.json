@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "keywords": [],
-  "type": "commonjs",
+  "type": "module",
   "license": "MIT",
   "author": "@binghuis(https://github.com/binghuis)",
   "bin": {
@@ -29,14 +29,18 @@
   "vitest": {
     "test": {
       "environment": "node",
-      "include": ["test/**/*.test.ts"],
-      "exclude": ["**/node_modules/**", "**/dist/**"],
+      "include": [
+        "test/**/*.test.ts"
+      ],
+      "exclude": [
+        "**/node_modules/**",
+        "**/dist/**"
+      ],
       "globals": false
     }
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "vitest": "^3.2.4",
     "@types/node": "^25.2.0",
     "eslint": "^9.39.2",
     "globals": "^17.3.0",
@@ -46,13 +50,22 @@
     "terser": "^5.46.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0"
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
+    "c12": "4.0.0-beta.3",
+    "cac": "^7.0.0",
     "consola": "^3.4.2",
-    "dotenv": "^17.2.3",
     "fast-glob": "^3.3.3",
-    "joycon": "^3.1.1",
-    "yaml": "^2.4.2"
+    "gpt-tokenizer": "^3.4.0",
+    "ignore": "^7.0.5",
+    "jsonrepair": "^3.13.2",
+    "openai": "^6.25.0",
+    "p-limit": "^7.3.0",
+    "ts-morph": "^27.0.2",
+    "yaml": "^2.4.2",
+    "zod": "^4.3.6",
+    "zod-to-json-schema": "^3.25.1"
   }
 }
