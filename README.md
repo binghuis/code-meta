@@ -43,7 +43,7 @@ npx code-meta --force
 
 ## 配置
 
-在项目根目录创建 `code-meta.config.js`、`code-meta.config.json` 或 `code-meta.config.ts`（需运行环境支持 TS），或使用 `.code-metarc` / `.code-metarc.json`。
+在项目根目录创建 `code-meta.config.js`、`code-meta.config.json`，或使用 `.code-metarc` / `.code-metarc.json`。
 
 ### 示例（code-meta.config.js）
 

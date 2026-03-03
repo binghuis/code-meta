@@ -13,6 +13,7 @@
     "dist"
   ],
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "dev": "tsup --watch",
     "build": "tsup",
@@ -31,7 +32,6 @@
     "prettier-plugin-organize-imports": "^4.3.0",
     "terser": "^5.46.0",
     "tsup": "^8.5.1",
-    "type-fest": "^5.4.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0"
   },
@@ -40,7 +40,6 @@
     "dotenv": "^17.2.3",
     "fast-glob": "^3.3.3",
     "joycon": "^3.1.1",
-    "kleur": "^4.1.5",
     "yaml": "^2.4.2"
   }
 }

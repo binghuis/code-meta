@@ -2,15 +2,20 @@
  * Stage 1: Scan source tree, build DirNode tree with md5 and fingerprint.
  */
 
-import type { DirNode, FileNode, ScanResult, TrivialReason } from "./types";
-import type { CodeMetaConfig } from "./types";
+import type {
+  CodeMetaConfig,
+  DirNode,
+  FileNode,
+  ScanResult,
+  TrivialReason,
+} from "./types";
+import { consola } from "consola";
 import crypto from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
 import fg from "fast-glob";
-
-const ROOT = process.cwd();
+import { ROOT } from "./constants";
 const TRIVIAL_LINE_THRESHOLD = 20;
 const BARREL_NAMES = new Set(["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs"]);
 
@@ -33,31 +38,108 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
-async function fileMd5AndSize(absPath: string): Promise<{ md5: string; size: number } | null> {
+const MD5_BATCH_SIZE = 50;
+
+export interface CachedFileMeta {
+  md5: string;
+  size: number;
+  mtimeMs?: number;
+  lines?: number;
+}
+
+async function fileMd5SizeAndLines(
+  absPath: string,
+  fallback?: CachedFileMeta,
+): Promise<{ md5: string; size: number; lines: number; mtimeMs: number } | null> {
   try {
     const stat = await fs.lstat(absPath);
     if (stat.isSymbolicLink() || !stat.isFile()) return null;
-    const content = await fs.readFile(absPath);
-    const md5 = crypto.createHash("md5").update(content).digest("hex");
-    return { md5, size: stat.size };
-  } catch {
+    if (
+      fallback &&
+      typeof fallback.mtimeMs === "number" &&
+      typeof fallback.lines === "number" &&
+      fallback.size === stat.size &&
+      Math.abs(fallback.mtimeMs - stat.mtimeMs) < 1
+    ) {
+      return {
+        md5: fallback.md5,
+        size: fallback.size,
+        lines: fallback.lines,
+        mtimeMs: fallback.mtimeMs,
+      };
+    }
+    const hash = crypto.createHash("md5");
+    let newlineCount = 0;
+    await new Promise<void>((resolve, reject) => {
+      const stream = createReadStream(absPath);
+      stream.on("data", (chunk: Buffer) => {
+        hash.update(chunk);
+        for (let i = 0; i < chunk.length; i++) {
+          if (chunk[i] === 10) newlineCount++;
+        }
+      });
+      stream.on("error", reject);
+      stream.on("end", resolve);
+    });
+    const md5 = hash.digest("hex");
+    const lines = newlineCount + 1;
+    return { md5, size: stat.size, lines, mtimeMs: stat.mtimeMs };
+  } catch (err) {
+    consola.warn(
+      `读取文件失败，已跳过: ${absPath}`,
+      err instanceof Error ? err.message : String(err),
+    );
     return null;
   }
 }
 
-/** Collect all file md5s under a directory (recursive) for fingerprint. */
-function allFileMd5sUnder(
-  dirPath: string,
-  fileList: Map<string, { md5: string; size: number }>,
-): string[] {
-  const md5s: string[] = [];
-  const prefix = dirPath === "." ? "" : dirPath + "/";
-  for (const [p, info] of fileList) {
-    if (dirPath === "." || p === dirPath || p.startsWith(prefix)) {
-      md5s.push(info.md5);
+async function fileListBatch(
+  rawFiles: string[],
+  root: string,
+  cachedFileMeta: Map<string, CachedFileMeta> = new Map(),
+): Promise<Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>> {
+  const result = new Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>();
+  for (let i = 0; i < rawFiles.length; i += MD5_BATCH_SIZE) {
+    const batch = rawFiles.slice(i, i + MD5_BATCH_SIZE);
+    const entries = await Promise.all(
+      batch.map(async (rel) => {
+        const abs = path.join(root, rel);
+        const info = await fileMd5SizeAndLines(abs, cachedFileMeta.get(rel));
+        return [rel, info] as const;
+      }),
+    );
+    for (const [rel, info] of entries) {
+      if (info) result.set(rel, info);
     }
   }
-  return md5s;
+  return result;
+}
+
+/** Build dir -> list of md5 for all files under that dir (and descendants). O(files * depth). */
+function buildDirMd5Index(
+  fileList: Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>,
+): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const [rel, info] of fileList) {
+    const dir = path.dirname(rel);
+    if (dir === "." || dir === "") {
+      const list = index.get(".") ?? [];
+      list.push(info.md5);
+      index.set(".", list);
+    } else {
+      const rootList = index.get(".") ?? [];
+      rootList.push(info.md5);
+      index.set(".", rootList);
+      const parts = dir.split("/").filter(Boolean);
+      for (let i = 1; i <= parts.length; i++) {
+        const ancestor = parts.slice(0, i).join("/");
+        const list = index.get(ancestor) ?? [];
+        list.push(info.md5);
+        index.set(ancestor, list);
+      }
+    }
+  }
+  return index;
 }
 
 function computeFingerprint(md5s: string[]): string {
@@ -67,7 +149,6 @@ function computeFingerprint(md5s: string[]): string {
 
 /** Detect trivial reason for a directory. */
 function detectTrivial(
-  dirPath: string,
   files: Array<{ name: string; path: string; md5: string; size: number }>,
   totalLines: number,
 ): TrivialReason | undefined {
@@ -81,10 +162,39 @@ function detectTrivial(
   return undefined;
 }
 
+function computeEffectiveRoot(
+  targetPath: string | undefined,
+  dirPaths: string[],
+): string {
+  if (targetPath != null && targetPath !== "") {
+    return normalizePath(targetPath).replace(/\/$/, "");
+  }
+  if (dirPaths.length === 0) return ".";
+  const first = dirPaths[0]!;
+  return first.includes("/") ? first.split("/")[0]! : ".";
+}
+
+function filterDirPaths(
+  dirPaths: string[],
+  targetPath: string | undefined,
+  depth: number | undefined,
+): string[] {
+  let out = dirPaths;
+  if (targetPath != null && targetPath !== "") {
+    const targetNorm = normalizePath(targetPath).replace(/\/$/, "");
+    out = out.filter((p) => p === targetNorm || p.startsWith(targetNorm + "/"));
+  }
+  if (depth !== undefined) {
+    out = out.filter((p) => p.split("/").filter(Boolean).length <= depth);
+  }
+  return out;
+}
+
 export interface ScanOptions {
   config: CodeMetaConfig;
   targetPath?: string;
   depth?: number;
+  cachedFileMeta?: Map<string, CachedFileMeta>;
 }
 
 /**
@@ -94,7 +204,7 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
   const { config, targetPath, depth } = options;
   const include = config.include?.length ? config.include : ["src"];
   const extensions =
-    config.allowedExtensions?.length ?? 0 > 0
+    (config.allowedExtensions?.length ?? 0) > 0
       ? config.allowedExtensions!
       : [".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"];
   const exclude = config.exclude ?? [];
@@ -118,14 +228,13 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
     rawFiles = rawFiles.filter((f) => f === targetNorm || f.startsWith(targetNorm + "/"));
   }
 
-  const fileList = new Map<string, { md5: string; size: number }>();
-  for (const rel of rawFiles) {
-    const abs = path.join(ROOT, rel);
-    const info = await fileMd5AndSize(abs);
-    if (info) fileList.set(rel, info);
-  }
+  const fileList = await fileListBatch(rawFiles, ROOT, options.cachedFileMeta);
+  const dirMd5Index = buildDirMd5Index(fileList);
 
-  const dirToFiles = new Map<string, Array<{ name: string; path: string; md5: string; size: number }>>();
+  const dirToFiles = new Map<
+    string,
+    Array<{ name: string; path: string; md5: string; size: number; lines: number; mtimeMs: number }>
+  >();
   const dirToSubdirs = new Map<string, Set<string>>();
 
   for (const rel of fileList.keys()) {
@@ -142,7 +251,14 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
         dirToSubdirs.get(parent)!.add(child);
       }
     }
-    dirToFiles.get(dir)!.push({ name, path: rel, md5: info.md5, size: info.size });
+    dirToFiles.get(dir)!.push({
+      name,
+      path: rel,
+      md5: info.md5,
+      size: info.size,
+      lines: info.lines,
+        mtimeMs: info.mtimeMs,
+    });
   }
 
   const allDirs = new Set<string>(dirToFiles.keys());
@@ -165,6 +281,8 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
       path: f.path,
       md5: f.md5,
       size: f.size,
+      mtimeMs: f.mtimeMs,
+      lines: f.lines,
     }));
     children.push(...fileNodes);
 
@@ -177,21 +295,14 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
       }
     }
 
-    const allMd5s = allFileMd5sUnder(dirPath, fileList);
+    const allMd5s = dirMd5Index.get(dirPath) ?? [];
     const fingerprint = computeFingerprint(allMd5s);
 
-    let totalLines = 0;
-    try {
-      for (const f of files) {
-        const abs = path.join(ROOT, f.path);
-        const content = await fs.readFile(abs, "utf8");
-        totalLines += content.split("\n").length;
-      }
-    } catch {
-      totalLines = 0;
-    }
-
-    const trivial = detectTrivial(dirPath, files, totalLines);
+    const totalLines = files.reduce((sum, f) => sum + (f.lines ?? 0), 0);
+    const trivial = detectTrivial(
+      files.map(({ name, path: p, md5, size }) => ({ name, path: p, md5, size })),
+      totalLines,
+    );
     const node: DirNode = {
       kind: "dir",
       name: dirPath === "." ? "." : path.basename(dirPath),
@@ -204,29 +315,13 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
     return node;
   }
 
-  const effectiveRoot =
-    targetPath != null && targetPath !== ""
-      ? normalizePath(targetPath).replace(/\/$/, "")
-      : dirPaths.length
-        ? (dirPaths[0]!.includes("/") ? dirPaths[0]!.split("/")[0]! : ".")
-        : ".";
+  const effectiveRoot = computeEffectiveRoot(targetPath, dirPaths);
+  const filteredDirPaths = filterDirPaths(dirPaths, targetPath, depth);
   const root = dirPaths.length > 0 ? await buildNode(effectiveRoot) : null;
-
-  let filteredDirPaths = dirPaths;
-  if (targetPath != null && targetPath !== "") {
-    const targetNorm = normalizePath(targetPath).replace(/\/$/, "");
-    filteredDirPaths = filteredDirPaths.filter(
-      (p) => p === targetNorm || p.startsWith(targetNorm + "/"),
-    );
-  }
-  if (depth !== undefined) {
-    filteredDirPaths = filteredDirPaths.filter(
-      (p) => p.split("/").filter(Boolean).length <= depth,
-    );
-  }
 
   return {
     root,
+    allDirPaths: dirPaths,
     dirPaths: filteredDirPaths,
     dirMap,
   };

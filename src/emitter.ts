@@ -6,9 +6,8 @@ import type { CacheData, CodeMetaConfig, DirAnalysis, OverridesMap } from "./typ
 import { getMergedAnalysis } from "./overrides";
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
-
-const ROOT = process.cwd();
+import { ROOT } from "./constants";
+import { buildFrontmatter } from "./frontmatter";
 
 function pathToRuleName(dirPath: string): string {
   if (dirPath === ".") return "_root";
@@ -16,7 +15,6 @@ function pathToRuleName(dirPath: string): string {
 }
 
 function buildRuleContent(
-  dirPath: string,
   analysis: DirAnalysis,
   maxLength: number,
 ): string {
@@ -60,6 +58,29 @@ function globForDir(dirPath: string): string {
   return `${dirPath}/**/*`;
 }
 
+async function writeRuleFile(
+  absOutputDir: string,
+  fileName: string,
+  frontmatter: Record<string, unknown>,
+  body: string,
+): Promise<void> {
+  const content = `---
+${buildFrontmatter(frontmatter)}
+---
+
+${body}
+`;
+  await fs.writeFile(path.join(absOutputDir, fileName), content, "utf8");
+}
+
+function isManagedSpecialRule(name: string): boolean {
+  return (
+    name === "_project-overview.mdc" ||
+    name === "_root.mdc" ||
+    name.startsWith("_feature--")
+  );
+}
+
 export interface EmitOptions {
   config: CodeMetaConfig;
   cacheData: CacheData;
@@ -87,6 +108,7 @@ export async function emit(options: EmitOptions): Promise<void> {
   }
 
   const written = new Set<string>();
+  const writePromises: Promise<void>[] = [];
 
   for (const dirPath of Object.keys(cacheData.directories)) {
     const cached = cacheData.directories[dirPath];
@@ -95,66 +117,62 @@ export async function emit(options: EmitOptions): Promise<void> {
     const analysis = getMergedAnalysis(dirPath, cached.analysis, overrides);
     const ruleName = pathToRuleName(dirPath) + ".mdc";
     const glob = globForDir(dirPath);
-
     const description =
       dirPath === "."
         ? "项目整体架构与模块概览"
         : `目录 ${dirPath} 的代码上下文`;
-
-    const body = buildRuleContent(dirPath, analysis, maxLength);
-    const content = `---
-description: ${description}
-globs:
-  - "${glob}"
----
-
-${body}
-`;
-
-    const filePath = path.join(absOutputDir, ruleName);
-    await fs.writeFile(filePath, content, "utf8");
+    const body = buildRuleContent(analysis, maxLength);
+    const frontmatter: Record<string, unknown> = {
+      description,
+      globs: [glob],
+    };
+    writePromises.push(writeRuleFile(absOutputDir, ruleName, frontmatter, body));
     written.add(ruleName);
   }
 
   if (projectOverview && Object.keys(cacheData.directories).length > 0) {
-    const rootPath = Object.keys(cacheData.directories).sort()[0];
+    const byDepth = (a: string, b: string) =>
+      a.split("/").filter(Boolean).length - b.split("/").filter(Boolean).length;
+    const rootPath = Object.keys(cacheData.directories).sort(byDepth)[0];
     const rootCached = rootPath ? cacheData.directories[rootPath] : null;
     if (rootCached?.analysis) {
       const analysis = getMergedAnalysis(rootPath ?? ".", rootCached.analysis, overrides);
-      const body = buildRuleContent(rootPath ?? ".", analysis, maxLength);
-      const overviewContent = `---
-description: 项目整体架构与模块概览
-globs:
-  - "**/*"
-alwaysApply: false
----
-
-${body}
-`;
-      const overviewPath = path.join(absOutputDir, "_project-overview.mdc");
-      await fs.writeFile(overviewPath, overviewContent, "utf8");
+      const body = buildRuleContent(analysis, maxLength);
+      const overviewFrontmatter: Record<string, unknown> = {
+        description: "项目整体架构与模块概览",
+        globs: ["**/*"],
+        alwaysApply: false,
+      };
+      writePromises.push(
+        writeRuleFile(absOutputDir, "_project-overview.mdc", overviewFrontmatter, body),
+      );
       written.add("_project-overview.mdc");
     }
   }
 
-  for (const dirPath of dirsToDelete) {
+  await Promise.all(writePromises);
+
+  const deleteDirPromises = dirsToDelete.map((dirPath) => {
     const ruleName = pathToRuleName(dirPath) + ".mdc";
-    const filePath = path.join(absOutputDir, ruleName);
-    try {
-      await fs.unlink(filePath);
-    } catch {
-      /* ignore */
-    }
-    existingFiles.delete(ruleName);
+    return fs.unlink(path.join(absOutputDir, ruleName)).catch(() => {});
+  });
+  await Promise.all(deleteDirPromises);
+  for (const dirPath of dirsToDelete) {
+    existingFiles.delete(pathToRuleName(dirPath) + ".mdc");
   }
 
-  for (const name of existingFiles) {
-    if (!written.has(name)) {
-      try {
-        await fs.unlink(path.join(absOutputDir, name));
-      } catch {
-        /* ignore */
-      }
-    }
+  const deletedRuleNames = new Set(dirsToDelete.map((dirPath) => pathToRuleName(dirPath) + ".mdc"));
+  const staleNames = [...existingFiles].filter((name) => {
+    if (written.has(name)) return false;
+    if (isManagedSpecialRule(name)) return true;
+    return deletedRuleNames.has(name);
+  });
+  await Promise.all(
+    staleNames.map((name) =>
+      fs.unlink(path.join(absOutputDir, name)).catch(() => {}),
+    ),
+  );
+  for (const name of staleNames) {
+    existingFiles.delete(name);
   }
 }

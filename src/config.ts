@@ -3,6 +3,7 @@
  */
 
 import type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
+import { consola } from "consola";
 import JoyCon from "joycon";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -53,7 +54,7 @@ async function parseGitignore(cwd: string): Promise<string[]> {
     return content
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
+      .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
       .map((line) => {
         const cleaned = line.replace(/\/$/, "");
         if (cleaned.startsWith("/")) {
@@ -69,7 +70,6 @@ async function parseGitignore(cwd: string): Promise<string[]> {
 function createConfigLoader() {
   return new JoyCon({
     files: [
-      "code-meta.config.ts",
       "code-meta.config.js",
       "code-meta.config.json",
       ".code-metarc",
@@ -108,7 +108,7 @@ export async function loadConfig(): Promise<LoadConfigResult> {
     }
     return { config: defaultConfig, configPath: null };
   } catch (error) {
-    console.warn("Failed to load config file, using defaults:", error);
+    consola.warn("Failed to load config file, using defaults:", error);
     return { config: defaultConfig, configPath: null };
   }
 }

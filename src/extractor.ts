@@ -4,9 +4,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
-
-const ROOT = process.cwd();
+import { ROOT } from "./constants";
 
 export interface ExtractedFile {
   name: string;
@@ -63,6 +61,10 @@ function extractExportsAndSignatures(content: string, budget: number): string {
       const openBraces = (line.match(/{/g) ?? []).length;
       const closeBraces = (line.match(/}/g) ?? []).length;
       braceDepth += openBraces - closeBraces;
+      out.push(line);
+      count += line.length + 1;
+      if (braceDepth <= 0) inExport = false;
+      continue;
     }
     if (inExport) {
       out.push(line);
@@ -116,14 +118,23 @@ export async function extractDirectoryContents(
   maxPerFile: number = MAX_PER_FILE,
   maxTotal: number = MAX_TOTAL,
 ): Promise<ExtractedFile[]> {
+  const extractions = await Promise.all(
+    files.map((f) => extractFileContent(f.path, maxPerFile)),
+  );
   const result: ExtractedFile[] = [];
   let total = 0;
-  for (const f of files) {
+  for (let i = 0; i < files.length; i++) {
     if (total >= maxTotal) break;
-    const perFileBudget = Math.min(maxPerFile, maxTotal - total);
-    const { content, truncated } = await extractFileContent(f.path, perFileBudget);
-    total += content.length;
-    result.push({ name: f.name, content, truncated });
+    const f = files[i]!;
+    const { content, truncated } = extractions[i]!;
+    const budget = maxTotal - total;
+    const slice = content.length <= budget ? content : content.slice(0, budget);
+    result.push({
+      name: f.name,
+      content: slice,
+      truncated: truncated || content.length > budget,
+    });
+    total += slice.length;
   }
   return result;
 }

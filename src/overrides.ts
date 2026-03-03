@@ -5,10 +5,8 @@
 import type { DirAnalysis, OverrideEntry, OverridesMap } from "./types";
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
 import { parse } from "yaml";
-
-const ROOT = process.cwd();
+import { ROOT } from "./constants";
 const OVERRIDES_PATH = path.join(ROOT, ".code-meta", "overrides.yaml");
 
 export async function loadOverrides(): Promise<OverridesMap> {

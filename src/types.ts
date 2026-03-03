@@ -9,6 +9,8 @@ export interface FileNode {
   path: string;
   md5: string;
   size: number;
+  mtimeMs: number;
+  lines: number;
 }
 
 /** Directory node in the scan tree (has children). */
@@ -75,7 +77,14 @@ export interface CachedDir {
   fingerprint: string;
   analyzedAt: string;
   analysis: DirAnalysis;
-  files: Record<string, { md5: string; size: number }>;
+  files: Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }>;
+}
+
+/** Feature rule content (directory + feature rules, cache). */
+export interface FeatureRuleContent {
+  description: string;
+  globs: string[];
+  body: string;
 }
 
 /** Root structure of .code-meta/cache.json */
@@ -84,6 +93,8 @@ export interface CacheData {
   createdAt: string;
   updatedAt: string;
   directories: Record<string, CachedDir>;
+  /** Feature analysis results; used by emit-only to avoid API calls. */
+  features?: Record<string, FeatureRuleContent>;
 }
 
 /** LLM provider configuration (OpenAI-compatible). */
@@ -133,6 +144,9 @@ export type OverridesMap = Record<string, OverrideEntry>;
 /** Scan result: root of the tree + flat list of all dir paths for iteration. */
 export interface ScanResult {
   root: DirNode | null;
+  /** Full scanned directory paths before target/depth filtering. */
+  allDirPaths: string[];
+  /** Scoped directory paths after target/depth filtering. */
   dirPaths: string[];
   dirMap: Map<string, DirNode>;
 }

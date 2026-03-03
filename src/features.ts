@@ -2,15 +2,15 @@
  * Feature map: cross-directory glob matching and feature-level rule generation.
  */
 
-import type { CodeMetaConfig } from "./types";
+import type { CodeMetaConfig, FeatureRuleContent } from "./types";
+import { consola } from "consola";
 import { chat, type ChatMessage } from "./provider";
 import { extractFileContent } from "./extractor";
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
 import fg from "fast-glob";
-
-const ROOT = process.cwd();
+import { ROOT } from "./constants";
+import { buildFrontmatter } from "./frontmatter";
 const MAX_FILES_PER_FEATURE = 15;
 const MAX_CHARS_PER_FEATURE = 12000;
 
@@ -33,11 +33,7 @@ const FEATURE_SCHEMA = {
   additionalProperties: false,
 };
 
-export interface FeatureRuleContent {
-  description: string;
-  globs: string[];
-  body: string;
-}
+export type { FeatureRuleContent } from "./types";
 
 export async function analyzeFeatures(
   config: CodeMetaConfig,
@@ -65,17 +61,27 @@ export async function analyzeFeatures(
     }
 
     files = files.slice(0, MAX_FILES_PER_FEATURE);
+    if (files.length === 0) {
+      result.set(name, {
+        description: featureConfig.description ?? `功能「${name}」相关代码上下文`,
+        globs,
+        body: "未匹配到文件，暂不生成分析内容。",
+      });
+      continue;
+    }
+    const extractions = await Promise.all(
+      files.map((rel) => extractFileContent(rel, 1500)),
+    );
     const parts: string[] = [];
     let totalChars = 0;
-
-    for (const rel of files) {
+    for (let i = 0; i < files.length; i++) {
       if (totalChars >= MAX_CHARS_PER_FEATURE) break;
-      const { content } = await extractFileContent(
-        rel,
-        Math.min(1500, MAX_CHARS_PER_FEATURE - totalChars),
-      );
-      parts.push(`--- ${rel} ---\n${content}`);
-      totalChars += content.length;
+      const rel = files[i]!;
+      const { content } = extractions[i]!;
+      const budget = MAX_CHARS_PER_FEATURE - totalChars;
+      const slice = content.length <= budget ? content : content.slice(0, budget);
+      parts.push(`--- ${rel} ---\n${slice}`);
+      totalChars += slice.length;
     }
 
     const userContent = `功能名称：${name}
@@ -120,7 +126,8 @@ ${featureConfig.description ? `配置描述：${featureConfig.description}\n` : 
         globs: globs,
         body,
       });
-    } catch {
+    } catch (err) {
+      consola.warn(`功能「${name}」分析失败，使用占位:`, err instanceof Error ? err.message : String(err));
       result.set(name, {
         description: featureConfig.description ?? `功能「${name}」`,
         globs,
@@ -140,18 +147,20 @@ export async function emitFeatureRules(
   const absOutputDir = path.join(ROOT, outputDir);
   await fs.mkdir(absOutputDir, { recursive: true });
 
-  for (const [name, fc] of featureContents) {
+  const writePromises = Array.from(featureContents, ([name, fc]) => {
     const safeName = name.replace(/\//g, "--").replace(/\s+/g, "-");
     const filePath = path.join(absOutputDir, `_feature--${safeName}.mdc`);
-    const globsYaml = fc.globs.map((g) => `  - "${g}"`).join("\n");
+    const frontmatter = buildFrontmatter({
+      description: fc.description,
+      globs: fc.globs,
+    });
     const content = `---
-description: ${fc.description}
-globs:
-${globsYaml}
+${frontmatter}
 ---
 
 ${fc.body}
 `;
-    await fs.writeFile(filePath, content, "utf8");
-  }
+    return fs.writeFile(filePath, content, "utf8");
+  });
+  await Promise.all(writePromises);
 }

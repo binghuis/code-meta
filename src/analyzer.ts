@@ -6,9 +6,11 @@ import type {
   CacheData,
   CodeMetaConfig,
   DirAnalysis,
-  DirNode,
   DiffResult,
+  FileNode,
+  DirNode,
 } from "./types";
+import { consola } from "consola";
 import { chat, type ChatMessage } from "./provider";
 import { extractDirectoryContents } from "./extractor";
 import * as cache from "./cache";
@@ -103,6 +105,100 @@ function topologicalOrder(toAnalyze: string[]): string[] {
   });
 }
 
+const ANALYZE_BATCH_SIZE = 4;
+
+function groupByDepthDesc(paths: string[]): string[][] {
+  const byDepth = new Map<number, string[]>();
+  for (const p of paths) {
+    const depth = p.split("/").filter(Boolean).length;
+    const list = byDepth.get(depth) ?? [];
+    list.push(p);
+    byDepth.set(depth, list);
+  }
+  return [...byDepth.keys()]
+    .sort((a, b) => b - a)
+    .map((depth) => byDepth.get(depth)!);
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    out.push(arr.slice(i, i + size));
+  }
+  return out;
+}
+
+async function analyzeOneDirectory(
+  dirPath: string,
+  node: DirNode,
+  config: CodeMetaConfig,
+  cacheSnapshot: CacheData | null,
+): Promise<DirAnalysis | null> {
+  if (node.trivial) {
+    return trivialAnalysis(dirPath, node);
+  }
+
+  const files = node.children
+    .filter((c): c is FileNode => c.kind === "file")
+    .map((c) => ({ name: c.name, path: c.path }));
+  const extracted = await extractDirectoryContents(files);
+
+  const subdirNames = node.children
+    .filter((c) => c.kind === "dir")
+    .map((c) => c.name);
+  const childSummaries: string[] = [];
+  for (const name of subdirNames) {
+    const childPath = dirPath === "." ? name : `${dirPath}/${name}`;
+    const cached = cacheSnapshot?.directories[childPath];
+    if (cached?.analysis?.summary) {
+      childSummaries.push(`${name}: ${cached.analysis.summary}`);
+    }
+  }
+
+  const filesSection = extracted
+    .map(
+      (f) =>
+        `--- ${f.name} ---\n${f.content}${f.truncated ? "\n(已截断)" : ""}`,
+    )
+    .join("\n\n");
+
+  const userContent = `目录路径：${dirPath}
+
+直接子目录：${subdirNames.length ? subdirNames.join("、") : "无"}
+
+${childSummaries.length ? "子目录摘要：\n" + childSummaries.join("\n") + "\n\n" : ""}该目录下文件内容（可能截断）：\n\n${filesSection}
+
+请根据实际内容分析，按 JSON schema 输出：summary（目录职责）、businessDomain、scenarios、conventions、files（name/purpose/exports）、subdirs（name/summary）。全部中文。`;
+
+  const systemContent =
+    "你是前端项目结构分析助手。根据目录路径、子目录摘要和文件源码内容，输出结构化的目录描述。描述必须基于实际代码，不要编造。全部使用中文。";
+
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemContent },
+    { role: "user", content: userContent },
+  ];
+
+  try {
+    const raw = await chat(config.provider, messages, {
+      responseFormat: {
+        type: "json_schema",
+        json_schema: {
+          name: "dir_analysis",
+          schema: DIR_ANALYSIS_SCHEMA,
+          strict: true,
+        },
+      },
+    });
+    return JSON.parse(raw) as DirAnalysis;
+  } catch (err) {
+    consola.warn(
+      `分析目录失败 [${dirPath}]，本次跳过缓存写入:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
 export interface AnalyzeContext {
   config: CodeMetaConfig;
   diffResult: DiffResult;
@@ -114,85 +210,53 @@ export interface AnalyzeContext {
 export async function runAnalyze(ctx: AnalyzeContext): Promise<CacheData> {
   const { config, diffResult, scanDirMap, cacheData, onProgress } = ctx;
   const ordered = topologicalOrder(diffResult.toAnalyze);
+  const layers = groupByDepthDesc(ordered);
   let currentCache = cacheData;
+  const failedDirs: string[] = [];
+  let progress = 0;
 
-  for (let i = 0; i < ordered.length; i++) {
-    const dirPath = ordered[i]!;
-    onProgress?.(i + 1, ordered.length, dirPath);
+  for (const layer of layers) {
+    for (const batch of chunk(layer, ANALYZE_BATCH_SIZE)) {
+      const snapshot = currentCache;
+      const analyzed = await Promise.all(
+        batch.map(async (dirPath) => {
+          progress++;
+          onProgress?.(progress, ordered.length, dirPath);
+          const node = scanDirMap.get(dirPath);
+          if (!node) return null;
+          const analysis = await analyzeOneDirectory(dirPath, node, config, snapshot);
+          if (!analysis) {
+            failedDirs.push(dirPath);
+            return null;
+          }
+          return { dirPath, node, analysis } as const;
+        }),
+      );
 
-    const node = scanDirMap.get(dirPath);
-    if (!node) continue;
-
-    let analysis: DirAnalysis;
-
-    if (node.trivial) {
-      analysis = trivialAnalysis(dirPath, node);
-    } else {
-      const files = node.children
-        .filter((c) => c.kind === "file")
-        .map((c) => ({ name: c.name, path: (c as { path: string }).path }));
-      const extracted = await extractDirectoryContents(files);
-
-      const subdirNames = node.children
-        .filter((c) => c.kind === "dir")
-        .map((c) => c.name);
-      const childSummaries: string[] = [];
-      for (const name of subdirNames) {
-        const childPath = dirPath === "." ? name : `${dirPath}/${name}`;
-        const cached = currentCache?.directories[childPath];
-        if (cached?.analysis?.summary) {
-          childSummaries.push(`${name}: ${cached.analysis.summary}`);
-        }
-      }
-
-      const filesSection = extracted
-        .map(
-          (f) =>
-            `--- ${f.name} ---\n${f.content}${f.truncated ? "\n(已截断)" : ""}`,
-        )
-        .join("\n\n");
-
-      const userContent = `目录路径：${dirPath}
-
-直接子目录：${subdirNames.length ? subdirNames.join("、") : "无"}
-
-${childSummaries.length ? "子目录摘要：\n" + childSummaries.join("\n") + "\n\n" : ""}该目录下文件内容（可能截断）：\n\n${filesSection}
-
-请根据实际内容分析，按 JSON schema 输出：summary（目录职责）、businessDomain、scenarios、conventions、files（name/purpose/exports）、subdirs（name/summary）。全部中文。`;
-
-      const systemContent =
-        "你是前端项目结构分析助手。根据目录路径、子目录摘要和文件源码内容，输出结构化的目录描述。描述必须基于实际代码，不要编造。全部使用中文。";
-
-      const messages: ChatMessage[] = [
-        { role: "system", content: systemContent },
-        { role: "user", content: userContent },
-      ];
-
-      try {
-        const raw = await chat(config.provider, messages, {
-          responseFormat: {
-            type: "json_schema",
-            json_schema: {
-              name: "dir_analysis",
-              schema: DIR_ANALYSIS_SCHEMA,
-              strict: true,
-            },
-          },
-        });
-        analysis = JSON.parse(raw) as DirAnalysis;
-      } catch {
-        analysis = trivialAnalysis(dirPath, node);
+      for (const item of analyzed) {
+        if (!item) continue;
+        currentCache = cache.updateCacheWithAnalysis(
+          currentCache,
+          item.dirPath,
+          item.node,
+          item.analysis,
+        );
       }
     }
-
-    currentCache = await cache.updateCacheWithAnalysis(
-      currentCache,
-      dirPath,
-      node,
-      analysis,
-    );
-    await cache.writeCache(currentCache);
   }
 
-  return currentCache!;
+  if (currentCache == null) {
+    const now = new Date().toISOString();
+    currentCache = {
+      version: cache.CACHE_VERSION,
+      createdAt: now,
+      updatedAt: now,
+      directories: {},
+    };
+  }
+  if (failedDirs.length > 0) {
+    consola.warn(`以下目录分析失败，后续运行会重试：${failedDirs.join(", ")}`);
+  }
+  await cache.writeCache(currentCache);
+  return currentCache;
 }

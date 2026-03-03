@@ -2,11 +2,17 @@
  * Stage 2: Compare scan result vs cache, mark dirs as unchanged/modified/new/deleted; bubble-up.
  */
 
-import type { DiffResult, DirDiff, DirNode, DirStatus } from "./types";
-import type { CacheData, ScanResult } from "./types";
+import type {
+  CacheData,
+  DiffResult,
+  DirDiff,
+  DirStatus,
+  ScanResult,
+} from "./types";
 
 export interface DifferOptions {
   force?: boolean;
+  allowDelete?: boolean;
 }
 
 /**
@@ -17,14 +23,14 @@ export function diff(
   cache: CacheData | null,
   options: DifferOptions = {},
 ): DiffResult {
-  const { force = false } = options;
+  const { force = false, allowDelete = true } = options;
   const dirDiffs = new Map<string, DirDiff>();
   const toAnalyze: string[] = [];
   const toSkip: string[] = [];
   const toDelete: string[] = [];
 
   const cachedDirs = cache?.directories ?? {};
-  const scannedPaths = new Set(scanResult.dirPaths);
+  const scannedPaths = new Set(scanResult.allDirPaths);
 
   for (const dirPath of scanResult.dirPaths) {
     const node = scanResult.dirMap.get(dirPath);
@@ -52,10 +58,12 @@ export function diff(
     }
   }
 
-  for (const dirPath of Object.keys(cachedDirs)) {
-    if (!scannedPaths.has(dirPath)) {
-      dirDiffs.set(dirPath, { path: dirPath, status: "deleted" });
-      toDelete.push(dirPath);
+  if (allowDelete && scannedPaths.size > 0) {
+    for (const dirPath of Object.keys(cachedDirs)) {
+      if (!scannedPaths.has(dirPath)) {
+        dirDiffs.set(dirPath, { path: dirPath, status: "deleted" });
+        toDelete.push(dirPath);
+      }
     }
   }
 
@@ -68,7 +76,8 @@ export function diff(
         bubbleUp.add(ancestor);
         const existing = dirDiffs.get(ancestor);
         if (existing?.status === "unchanged") {
-          toSkip.splice(toSkip.indexOf(ancestor), 1);
+          const skipIdx = toSkip.indexOf(ancestor);
+          if (skipIdx >= 0) toSkip.splice(skipIdx, 1);
           toAnalyze.push(ancestor);
           dirDiffs.set(ancestor, {
             ...existing,

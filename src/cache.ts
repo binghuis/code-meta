@@ -2,12 +2,10 @@
  * Read/write .code-meta/cache.json with version migration.
  */
 
-import type { CacheData, CachedDir, DirAnalysis, DirNode } from "./types";
+import type { CacheData, DirAnalysis, DirNode } from "./types";
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
-
-const ROOT = process.cwd();
+import { ROOT } from "./constants";
 const CACHE_DIR = ".code-meta";
 const CACHE_FILE = "cache.json";
 export const CACHE_VERSION = 1;
@@ -34,54 +32,44 @@ export async function writeCache(data: CacheData): Promise<void> {
   const cachePath = getCachePath();
   const dir = path.dirname(cachePath);
   await fs.mkdir(dir, { recursive: true });
-  data.updatedAt = new Date().toISOString();
-  await fs.writeFile(cachePath, JSON.stringify(data, null, 2), "utf8");
+  const payload = { ...data, updatedAt: new Date().toISOString() };
+  await fs.writeFile(cachePath, JSON.stringify(payload, null, 2), "utf8");
 }
 
-function filesFromNode(node: DirNode): Record<string, { md5: string; size: number }> {
-  const out: Record<string, { md5: string; size: number }> = {};
+function filesFromNode(
+  node: DirNode,
+): Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }> {
+  const out: Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }> = {};
   for (const c of node.children) {
     if (c.kind === "file") {
-      out[c.name] = { md5: c.md5, size: c.size };
+      out[c.name] = { md5: c.md5, size: c.size, mtimeMs: c.mtimeMs, lines: c.lines };
     }
   }
   return out;
 }
 
-export async function updateCacheWithAnalysis(
+export function updateCacheWithAnalysis(
   cache: CacheData | null,
   dirPath: string,
   node: DirNode,
   analysis: DirAnalysis,
-): Promise<CacheData> {
+): CacheData {
   const now = new Date().toISOString();
-  const next: CacheData = cache
-    ? { ...cache, directories: { ...cache.directories } }
-    : {
-        version: CACHE_VERSION,
-        createdAt: now,
-        updatedAt: now,
-        directories: {},
-      };
-
-  next.directories[dirPath] = {
+  const entry = {
     fingerprint: node.fingerprint,
     analyzedAt: now,
     analysis,
     files: filesFromNode(node),
   };
-  next.updatedAt = now;
-  return next;
-}
-
-export async function removeCacheEntries(
-  cache: CacheData,
-  dirPaths: string[],
-): Promise<CacheData> {
-  const next = { ...cache, directories: { ...cache.directories } };
-  for (const p of dirPaths) {
-    delete next.directories[p];
+  if (cache == null) {
+    return {
+      version: CACHE_VERSION,
+      createdAt: now,
+      updatedAt: now,
+      directories: { [dirPath]: entry },
+    };
   }
-  next.updatedAt = new Date().toISOString();
-  return next;
+  cache.directories[dirPath] = entry;
+  cache.updatedAt = now;
+  return cache;
 }

@@ -2,26 +2,45 @@
  * Pipeline: scan -> diff -> analyze -> emit (with dry-run, emit-only, force).
  */
 
-import type { PipelineOptions } from "./types";
+import type { CacheData, DiffResult, PipelineOptions, ScanResult } from "./types";
+import type { CachedFileMeta } from "./scanner";
+import { consola } from "consola";
 import { loadConfig } from "./config";
 import { scan } from "./scanner";
 import { diff } from "./differ";
 import { runAnalyze } from "./analyzer";
 import { emit } from "./emitter";
 import { loadOverrides } from "./overrides";
-import { readCache, writeCache, removeCacheEntries } from "./cache";
+import { readCache, writeCache } from "./cache";
 import { analyzeFeatures, emitFeatureRules } from "./features";
 
 export interface PipelineResult {
-  scanResult?: import("./types").ScanResult;
-  diffResult?: import("./types").DiffResult;
-  cacheData?: import("./types").CacheData;
+  scanResult?: ScanResult;
+  diffResult?: DiffResult;
+  cacheData?: CacheData;
   dryRun?: boolean;
   emitOnly?: boolean;
   /** Estimated token count for dry-run (input). */
   estimatedInputTokens?: number;
   /** Estimated token count for dry-run (output). */
   estimatedOutputTokens?: number;
+}
+
+function buildCachedFileMetaIndex(cacheData: CacheData | null): Map<string, CachedFileMeta> {
+  const index = new Map<string, CachedFileMeta>();
+  if (!cacheData) return index;
+  for (const [dirPath, dirEntry] of Object.entries(cacheData.directories)) {
+    for (const [name, file] of Object.entries(dirEntry.files)) {
+      const relPath = dirPath === "." ? name : `${dirPath}/${name}`;
+      index.set(relPath, {
+        md5: file.md5,
+        size: file.size,
+        mtimeMs: file.mtimeMs,
+        lines: file.lines,
+      });
+    }
+  }
+  return index;
 }
 
 export async function runPipeline(
@@ -49,27 +68,33 @@ export async function runPipeline(
       overrides,
       dirsToDelete: [],
     });
+    if (cacheData.features && Object.keys(cacheData.features).length > 0) {
+      const featureContents = new Map(Object.entries(cacheData.features));
+      await emitFeatureRules(config, featureContents);
+    }
     return { cacheData, emitOnly: true };
   }
+
+  let cacheData = await readCache();
+  if (force) {
+    cacheData = null;
+  }
+  const cachedFileMeta = buildCachedFileMetaIndex(cacheData);
 
   const scanResult = await scan({
     config,
     targetPath,
     depth,
+    cachedFileMeta,
   });
 
-  let cacheData = await readCache();
-  if (force && cacheData) {
-    const toDelete = scanResult.dirPaths.filter(
-      (p) => !scanResult.dirMap.has(p) || true,
-    );
-    cacheData = await removeCacheEntries(cacheData, []);
-  }
-
-  const diffResult = diff(scanResult, cacheData, { force });
+  const scopedRun = targetPath != null || depth !== undefined;
+  const diffResult = diff(scanResult, cacheData, {
+    force,
+    allowDelete: !scopedRun,
+  });
 
   if (dryRun) {
-    const toAnalyzeCount = diffResult.toAnalyze.length;
     let estimatedInput = 0;
     let estimatedOutput = 0;
     for (const dirPath of diffResult.toAnalyze) {
@@ -89,6 +114,13 @@ export async function runPipeline(
     };
   }
 
+  if (cacheData && diffResult.toDelete.length > 0) {
+    for (const dirPath of diffResult.toDelete) {
+      delete cacheData.directories[dirPath];
+    }
+  }
+
+  // 有变更且有 API Key：调 AI 分析
   if (diffResult.toAnalyze.length > 0 && config.provider.apiKey) {
     cacheData = await runAnalyze({
       config,
@@ -97,14 +129,27 @@ export async function runPipeline(
       cacheData,
       onProgress,
     });
-  } else if (!cacheData && diffResult.toAnalyze.length > 0) {
+  // 有变更但无 API Key：无法分析，提前返回（避免输出过期规则）
+  } else if (diffResult.toAnalyze.length > 0 && !config.provider.apiKey) {
+    consola.warn("检测到代码变更但未配置 API Key，已跳过规则生成以避免产出过期规则。");
+    if (cacheData && diffResult.toDelete.length > 0) {
+      const overrides = await loadOverrides();
+      await emit({
+        config,
+        cacheData,
+        overrides,
+        dirsToDelete: diffResult.toDelete,
+      });
+      await writeCache(cacheData);
+    }
     return {
       scanResult,
       diffResult,
-      cacheData: undefined,
+      cacheData: cacheData ?? undefined,
     };
+  // 无变更或已分析完：复用现有 cache
   } else {
-    cacheData = cacheData ?? (await readCache()) ?? undefined;
+    // cacheData 已由上文赋值，无需 readCache()
   }
 
   if (cacheData) {
@@ -116,16 +161,28 @@ export async function runPipeline(
       dirsToDelete: diffResult.toDelete,
     });
 
+    if (diffResult.toDelete.length > 0) {
+      await writeCache(cacheData);
+    }
+
     const featureKeys = Object.keys(config.features ?? {});
     if (featureKeys.length > 0) {
-      const featureContents = await analyzeFeatures(config);
-      await emitFeatureRules(config, featureContents);
+      if (config.provider.apiKey) {
+        const featureContents = await analyzeFeatures(config);
+        await emitFeatureRules(config, featureContents);
+        cacheData.features = Object.fromEntries(featureContents);
+        await writeCache(cacheData);
+      } else if (cacheData.features && Object.keys(cacheData.features).length > 0) {
+        await emitFeatureRules(config, new Map(Object.entries(cacheData.features)));
+      } else {
+        consola.warn("未配置 API Key 且无 feature 缓存，已跳过 feature rules 生成。");
+      }
     }
   }
 
   return {
     scanResult,
     diffResult,
-    cacheData,
+    cacheData: cacheData ?? undefined,
   };
 }

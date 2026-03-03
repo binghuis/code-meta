@@ -5,7 +5,7 @@ export default defineConfig({
   outDir: "dist",
   sourcemap: false,
   clean: true,
-  dts: false,
+  dts: true,
   format: ["cjs"],
   minify: "terser",
   treeshake: true,
