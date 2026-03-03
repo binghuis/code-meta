@@ -24,6 +24,13 @@
   },
   "bugs": "https://github.com/binghuis/code-meta/issues",
   "homepage": "https://github.com/binghuis/code-meta",
+  "vitest": {
+    "test": {
+      "environment": "node",
+      "include": ["test/**/*.test.ts"],
+      "globals": false
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "vitest": "^3.2.4",

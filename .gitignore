@@ -3,3 +3,4 @@ dist
 .DS_Store
 .code-meta/
 .cursor/rules/code-meta/
+test/fixtures/

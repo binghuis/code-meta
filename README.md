@@ -121,6 +121,22 @@ git add .cursor/rules/code-meta .code-meta/cache.json
 npx code-meta
 ```
 
+## 开发
+
+```bash
+# 安装依赖
+npm install
+
+# 构建
+npm run build
+
+# 全量自测（Vitest）
+npm run test
+
+# 监听模式
+npm run test:watch
+```
+
 ## License
 
 MIT

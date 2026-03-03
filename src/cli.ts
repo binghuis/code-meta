@@ -33,7 +33,7 @@ Examples:
   npx code-meta --emit-only
 `;
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
   targetPath?: string;
   depth?: number;
   dryRun: boolean;
