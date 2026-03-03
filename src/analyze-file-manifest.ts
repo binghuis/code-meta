@@ -89,11 +89,6 @@ const DIR_DESC_SCHEMA = {
   additionalProperties: false,
 };
 
-function getManifestPath(): string {
-  const arg = process.argv.find((a) => a.startsWith("--manifest="));
-  return arg ? arg.slice(11) : path.join(ROOT, "file-manifest.json");
-}
-
 /** 将 manifest 按目录分组为 dir -> { subdirs, files } */
 function buildDirMap(manifest: FileDescription[]): Map<string, DirInfo> {
   const dirMap = new Map<string, DirInfo>();
@@ -251,7 +246,18 @@ ${filesSection}
   }
 }
 
-async function main(): Promise<void> {
+export interface AnalyzeManifestOptions {
+  /** manifest 文件路径，默认 <cwd>/file-manifest.json */
+  manifestPath?: string;
+}
+
+/**
+ * 读取 file-manifest.json 并按目录调用 ARK 分析，生成 .dir-desc.json。
+ * 可在其他项目中通过 CLI 或直接调用。
+ */
+export async function runAnalyze(
+  options: AnalyzeManifestOptions = {},
+): Promise<void> {
   const { config } = await loadConfig();
   const apiKey = config.arkApiKey ?? "";
   const baseUrl =
@@ -260,11 +266,18 @@ async function main(): Promise<void> {
   const timeoutMs = config.apiTimeout ?? 90000;
 
   if (!apiKey) {
-    console.error("Error: ARK_API_KEY 未设置，请在 .env 或 code-meta.config 中配置。");
+    console.error(
+      "Error: ARK_API_KEY 未设置，请在 .env 或 code-meta.config 中配置。",
+    );
     process.exit(1);
   }
 
-  const manifestPath = getManifestPath();
+  const manifestPath =
+    options.manifestPath ??
+    (() => {
+      const arg = process.argv.find((a) => a.startsWith("--manifest="));
+      return arg ? arg.slice(11) : path.join(ROOT, "file-manifest.json");
+    })();
   const raw = await fs.readFile(manifestPath, "utf8");
   const manifest = JSON.parse(raw) as FileDescription[];
   if (!Array.isArray(manifest)) {
@@ -273,7 +286,9 @@ async function main(): Promise<void> {
 
   const dirMap = buildDirMap(manifest);
   const dirs = [...dirMap.keys()].sort();
-  console.log(`Analyzing ${dirs.length} directories with 豆包 ARK (${model})...`);
+  console.log(
+    `Analyzing ${dirs.length} directories with 豆包 ARK (${model})...`,
+  );
 
   const apiOpts = { apiKey, baseUrl, model, timeoutMs };
   for (const dir of dirs) {
@@ -299,10 +314,8 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`Done. Wrote ${DIR_DESC_FILENAME} in ${dirs.length} directories.`);
+  console.log(
+    `Done. Wrote ${DIR_DESC_FILENAME} in ${dirs.length} directories.`,
+  );
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});

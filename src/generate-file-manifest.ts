@@ -47,12 +47,18 @@ async function describeFile(filePath: string): Promise<FileDescription | null> {
   return { path: filePath, size: stat.size, md5 };
 }
 
-function getOutPath(): string {
-  const arg = process.argv.find((a) => a.startsWith("--out="));
-  return arg ? arg.slice(6) : path.join(ROOT, "file-manifest.json");
+export interface GenerateManifestOptions {
+  /** 输出文件路径，默认 <cwd>/file-manifest.json */
+  outPath?: string;
 }
 
-async function main(): Promise<void> {
+/**
+ * 生成 file-manifest.json，可在其他项目中通过 CLI 或直接调用。
+ * 使用当前工作目录的 code-meta config（或默认配置）。
+ */
+export async function runGenerate(
+  options: GenerateManifestOptions = {},
+): Promise<void> {
   const { config } = await loadConfig();
   const extensions =
     (config.allowedExtensions?.length ?? 0) > 0
@@ -60,7 +66,12 @@ async function main(): Promise<void> {
       : [...DEFAULT_ALLOWED_EXTENSIONS];
   const exclude = config.exclude ?? [];
 
-  const outPath = getOutPath();
+  const outPath =
+    options.outPath ??
+    (() => {
+      const arg = process.argv.find((a) => a.startsWith("--out="));
+      return arg ? arg.slice(6) : path.join(ROOT, "file-manifest.json");
+    })();
   const patterns = buildPatterns(extensions);
   const ignore = buildIgnore(exclude);
   const files = await fg(patterns, {
@@ -82,7 +93,3 @@ async function main(): Promise<void> {
   console.log(`Wrote ${descriptions.length} entries to ${outPath}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
