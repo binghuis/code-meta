@@ -8,14 +8,14 @@ import type {
   FileNode,
   ScanResult,
   TrivialReason,
-} from "./types";
+} from "../core/types";
 import { consola } from "consola";
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
-import { ROOT } from "./constants";
+import { ROOT } from "../core/constants";
 const TRIVIAL_LINE_THRESHOLD = 20;
 const BARREL_NAMES = new Set([
   "index.ts",

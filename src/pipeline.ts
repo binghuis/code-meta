@@ -2,17 +2,17 @@
  * Pipeline: scan -> diff -> analyze -> emit (with dry-run, emit-only, force).
  */
 
-import type { CacheData, DiffResult, PipelineOptions, ScanResult } from "./types";
-import type { CachedFileMeta } from "./scanner";
+import type { CacheData, DiffResult, PipelineOptions, ScanResult } from "./core/types";
+import type { CachedFileMeta } from "./scan/scanner";
 import { consola } from "consola";
-import { loadConfig } from "./config";
-import { scan } from "./scanner";
-import { diff } from "./differ";
-import { runAnalyze } from "./analyzer";
-import { emit } from "./emitter";
-import { loadOverrides } from "./overrides";
-import { readCache, writeCache } from "./cache";
-import { analyzeFeatures, emitFeatureRules } from "./features";
+import { loadConfig } from "./core/config";
+import { scan } from "./scan/scanner";
+import { diff } from "./scan/differ";
+import { runAnalyze } from "./analyze/analyzer";
+import { emit } from "./emit/emitter";
+import { loadOverrides } from "./data/overrides";
+import { readCache, writeCache } from "./data/cache";
+import { analyzeFeatures } from "./analyze/features";
 
 export interface PipelineResult {
   scanResult?: ScanResult;
@@ -68,10 +68,6 @@ export async function runPipeline(
       overrides,
       dirsToDelete: [],
     });
-    if (cacheData.features && Object.keys(cacheData.features).length > 0) {
-      const featureContents = new Map(Object.entries(cacheData.features));
-      await emitFeatureRules(config, featureContents);
-    }
     return { cacheData, emitOnly: true };
   }
 
@@ -129,9 +125,9 @@ export async function runPipeline(
       cacheData,
       onProgress,
     });
-  // 有变更但无 API Key：无法分析，提前返回（避免输出过期规则）
+  // 有变更但无 API Key：无法分析，提前返回（避免产出过期元信息）
   } else if (diffResult.toAnalyze.length > 0 && !config.provider.apiKey) {
-    consola.warn("检测到代码变更但未配置 API Key，已跳过规则生成以避免产出过期规则。");
+    consola.warn("检测到代码变更但未配置 API Key，已跳过元信息生成以避免产出过期内容。");
     if (cacheData && diffResult.toDelete.length > 0) {
       const overrides = await loadOverrides();
       await emit({
@@ -169,13 +165,10 @@ export async function runPipeline(
     if (featureKeys.length > 0) {
       if (config.provider.apiKey) {
         const featureContents = await analyzeFeatures(config);
-        await emitFeatureRules(config, featureContents);
         cacheData.features = Object.fromEntries(featureContents);
         await writeCache(cacheData);
-      } else if (cacheData.features && Object.keys(cacheData.features).length > 0) {
-        await emitFeatureRules(config, new Map(Object.entries(cacheData.features)));
-      } else {
-        consola.warn("未配置 API Key 且无 feature 缓存，已跳过 feature rules 生成。");
+      } else if (!cacheData.features || Object.keys(cacheData.features).length === 0) {
+        consola.warn("未配置 API Key 且无 feature 缓存，已跳过 feature 元信息生成。");
       }
     }
   }

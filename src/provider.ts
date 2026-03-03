@@ -2,7 +2,7 @@
  * OpenAI-compatible LLM chat client with timeout and token estimation.
  */
 
-import type { ProviderConfig } from "./types";
+import type { ProviderConfig } from "./core/types";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";

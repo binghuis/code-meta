@@ -9,11 +9,11 @@ import type {
   DiffResult,
   FileNode,
   DirNode,
-} from "./types";
+} from "../core/types";
 import { consola } from "consola";
-import { chat, extractJsonFromModelResponse, type ChatMessage } from "./provider";
-import { extractDirectoryContents } from "./extractor";
-import * as cache from "./cache";
+import { chat, extractJsonFromModelResponse, type ChatMessage } from "../provider";
+import { extractDirectoryContents } from "../scan/extractor";
+import * as cache from "../data/cache";
 
 const DIR_ANALYSIS_SCHEMA = {
   type: "object",

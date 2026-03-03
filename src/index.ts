@@ -9,20 +9,20 @@ export type {
   DiffResult,
   PipelineOptions,
   ScanResult,
-} from "./types";
-export { loadConfig, getDefaultConfig, DEFAULT_ALLOWED_EXTENSIONS } from "./config";
-export type { LoadConfigResult } from "./config";
+} from "./core/types";
+export { loadConfig, getDefaultConfig, DEFAULT_ALLOWED_EXTENSIONS } from "./core/config";
+export type { LoadConfigResult } from "./core/config";
 export { runPipeline } from "./pipeline";
 export type { PipelineResult } from "./pipeline";
-export { scan } from "./scanner";
-export type { ScanOptions } from "./scanner";
-export { diff } from "./differ";
-export type { DifferOptions } from "./differ";
-export { readCache, writeCache, getCachePath, CACHE_VERSION } from "./cache";
-export { loadOverrides, getMergedAnalysis } from "./overrides";
-export { emit } from "./emitter";
-export type { EmitOptions } from "./emitter";
-export { analyzeFeatures, emitFeatureRules } from "./features";
-export type { FeatureRuleContent } from "./features";
+export { scan } from "./scan/scanner";
+export type { ScanOptions } from "./scan/scanner";
+export { diff } from "./scan/differ";
+export type { DifferOptions } from "./scan/differ";
+export { readCache, writeCache, getCachePath, CACHE_VERSION } from "./data/cache";
+export { loadOverrides, getMergedAnalysis } from "./data/overrides";
+export { emit } from "./emit/emitter";
+export type { EmitOptions } from "./emit/emitter";
+export { analyzeFeatures } from "./analyze/features";
+export type { FeatureRuleContent } from "./analyze/features";
 export { chat, estimateTokens } from "./provider";
 export type { ChatMessage, ChatOptions } from "./provider";

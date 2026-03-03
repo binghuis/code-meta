@@ -2,15 +2,12 @@
  * Feature map: cross-directory glob matching and feature-level rule generation.
  */
 
-import type { CodeMetaConfig, FeatureRuleContent } from "./types";
+import type { CodeMetaConfig, FeatureRuleContent } from "../core/types";
 import { consola } from "consola";
-import { chat, extractJsonFromModelResponse, type ChatMessage } from "./provider";
-import { extractFileContent } from "./extractor";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { chat, extractJsonFromModelResponse, type ChatMessage } from "../provider";
+import { extractFileContent } from "../scan/extractor";
 import fg from "fast-glob";
-import { ROOT } from "./constants";
-import { buildFrontmatter } from "./frontmatter";
+import { ROOT } from "../core/constants";
 const MAX_FILES_PER_FEATURE = 15;
 const MAX_CHARS_PER_FEATURE = 12000;
 
@@ -33,7 +30,7 @@ const FEATURE_SCHEMA = {
   additionalProperties: false,
 };
 
-export type { FeatureRuleContent } from "./types";
+export type { FeatureRuleContent } from "../core/types";
 
 export async function analyzeFeatures(
   config: CodeMetaConfig,
@@ -144,30 +141,4 @@ ${featureConfig.description ? `配置描述：${featureConfig.description}\n` : 
   }
 
   return result;
-}
-
-export async function emitFeatureRules(
-  config: CodeMetaConfig,
-  featureContents: Map<string, FeatureRuleContent>,
-): Promise<void> {
-  const outputDir = config.rules?.outputDir ?? ".cursor/rules/code-meta";
-  const absOutputDir = path.join(ROOT, outputDir);
-  await fs.mkdir(absOutputDir, { recursive: true });
-
-  const writePromises = Array.from(featureContents, ([name, fc]) => {
-    const safeName = name.replace(/\//g, "--").replace(/\s+/g, "-");
-    const filePath = path.join(absOutputDir, `_feature--${safeName}.mdc`);
-    const frontmatter = buildFrontmatter({
-      description: fc.description,
-      globs: fc.globs,
-    });
-    const content = `---
-${frontmatter}
----
-
-${fc.body}
-`;
-    return fs.writeFile(filePath, content, "utf8");
-  });
-  await Promise.all(writePromises);
 }

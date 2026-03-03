@@ -2,10 +2,10 @@
  * Read/write .code-meta/cache.json with version migration.
  */
 
-import type { CacheData, DirAnalysis, DirNode } from "./types";
+import type { CacheData, DirAnalysis, DirNode } from "../core/types";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ROOT } from "./constants";
+import { ROOT } from "../core/constants";
 const CACHE_DIR = ".code-meta";
 const CACHE_FILE = "cache.json";
 export const CACHE_VERSION = 1;

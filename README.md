@@ -1,15 +1,15 @@
 # code-meta
 
-根据项目源码自动生成 **Cursor Rules**（`.cursor/rules/code-meta/*.mdc`），让 AI 编码助手理解目录职责、业务领域与使用场景。
+根据项目源码自动生成 **Cursor Skill 资源**（`.cursor/skills/code-meta/project-meta.json`），供 AI 按需查阅项目结构、目录职责与文件说明。
 
 ## 功能
 
 - **扫描**：遍历 `src`（可配置）目录，构建文件树并计算 md5 / 目录 fingerprint
 - **增量**：基于 fingerprint 只对变更目录调用 AI，节省成本
 - **分析**：自底向上用 LLM 分析每个目录，输出 summary、业务领域、场景、约定、文件说明
-- **规则**：直接生成 Cursor 可读的 `.mdc` 规则文件
+- **Skill 资源**：生成单份 JSON 项目元信息文档（project-meta.json），作为 Skill 资源供 AI 使用；若目录下无 SKILL.md 则创建默认，有则不动
 - **人工覆写**：通过 `.code-meta/overrides.yaml` 修正或补充 AI 描述
-- **Feature Map**：按功能跨目录聚合，生成功能维度的规则
+- **Feature Map**：按功能跨目录聚合，结果写入同一 JSON 的 features 段
 
 ## 安装
 
@@ -22,7 +22,7 @@ npm i -D code-meta
 ## 使用
 
 ```bash
-# 全量分析并生成规则（首次或日常）
+# 全量分析并生成项目元信息（首次或日常）
 npx code-meta
 
 # 仅扫描与 diff，不调用 API，查看待分析目录与预估 token
@@ -34,7 +34,7 @@ npx code-meta src/modules/payment
 # 只分析目录深度 ≤ N 层
 npx code-meta --depth=2
 
-# 仅从缓存重新生成 .mdc，不调用 API（适合新人或改模板后）
+# 仅从缓存重新生成 project-meta.json，不调用 API（适合新人或改模板后）
 npx code-meta --emit-only
 
 # 忽略缓存，全量重新分析
@@ -58,10 +58,9 @@ module.exports = {
     model: process.env.ARK_MODEL || "doubao-seed-1-8-251228",
     timeout: 90000,
   },
-  rules: {
-    outputDir: ".cursor/rules/code-meta",
-    maxRuleLength: 800,
-    projectOverview: true,
+  skill: {
+    outputDir: ".cursor/skills/code-meta",
+    metaFileName: "project-meta.json",
   },
   features: {
     payment: {
@@ -87,25 +86,25 @@ src/legacy/payment:
 
 ## 产出与缓存
 
-- **规则文件**：`.cursor/rules/code-meta/*.mdc`（建议加入 `.gitignore`，由本地或 CI 生成）
-- **缓存**：`.code-meta/cache.json`（可提交到 Git，便于团队共享；新人 `npx code-meta --emit-only` 即可生成规则，无需 API）
+- **Skill 资源**：`.cursor/skills/code-meta/project-meta.json`（结构化项目元信息）；同目录下若无 `SKILL.md` 则自动创建默认，有则不动（建议将 `project-meta.json` 或整目录加入 `.gitignore`，由本地或 CI 生成）
+- **缓存**：`.code-meta/cache.json`（可提交到 Git，便于团队共享；新人 `npx code-meta --emit-only` 即可生成元信息，无需 API）
 
 ## 与 Cursor 集成
 
-1. 在项目根执行 `npx code-meta` 生成规则。
-2. Cursor 会自动读取 `.cursor/rules/` 下的 `.mdc` 文件，在匹配的 glob 下为 AI 提供上下文。
+1. 在项目根执行 `npx code-meta` 生成 project-meta.json。
+2. 将 `.cursor/skills/code-meta` 作为 Skill 使用；AI 在需要理解项目结构时查阅同目录下的 `project-meta.json`。
 
 ## 集成到工作流
 
-### 提交前更新规则（推荐）
+### 提交前更新元信息（推荐）
 
 ```bash
 # .husky/pre-commit 或 pre-commit hook
 npx code-meta
-git add .cursor/rules/code-meta .code-meta/cache.json
+git add .cursor/skills/code-meta .code-meta/cache.json
 ```
 
-### 新人克隆后仅生成规则（不调 API）
+### 新人克隆后仅生成元信息（不调 API）
 
 ```bash
 # package.json scripts

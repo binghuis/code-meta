@@ -2,11 +2,11 @@
  * Human override layer: read .code-meta/overrides.yaml and merge with AI results.
  */
 
-import type { DirAnalysis, OverrideEntry, OverridesMap } from "./types";
+import type { DirAnalysis, OverrideEntry, OverridesMap } from "../core/types";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
-import { ROOT } from "./constants";
+import { ROOT } from "../core/constants";
 const OVERRIDES_PATH = path.join(ROOT, ".code-meta", "overrides.yaml");
 
 export async function loadOverrides(): Promise<OverridesMap> {

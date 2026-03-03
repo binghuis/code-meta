@@ -2,11 +2,11 @@
  * Configuration loading: code-meta.config.* + .gitignore parsing.
  */
 
-import type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
+import type { CodeMetaConfig, ProviderConfig, SkillConfig } from "./types";
 import { consola } from "consola";
 import JoyCon from "joycon";
 
-export type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
+export type { CodeMetaConfig, ProviderConfig, SkillConfig } from "./types";
 
 /** Default extensions to scan. */
 export const DEFAULT_ALLOWED_EXTENSIONS = [
@@ -77,9 +77,9 @@ export async function loadConfig(): Promise<LoadConfigResult> {
           ...defaultConfig.provider,
           ...(user.provider ?? {}),
         },
-        rules: user.rules
-          ? { ...defaultConfig.rules, ...user.rules }
-          : defaultConfig.rules,
+        skill: user.skill
+          ? { ...defaultConfig.skill, ...user.skill }
+          : defaultConfig.skill,
         features: user.features ?? defaultConfig.features,
       };
       return { config, configPath: result.path ?? null };
@@ -105,10 +105,9 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
     timeout: 90000,
   };
 
-  const rules: RulesConfig = {
-    outputDir: ".cursor/rules/code-meta",
-    maxRuleLength: 800,
-    projectOverview: true,
+  const skill: SkillConfig = {
+    outputDir: ".cursor/skills/code-meta",
+    metaFileName: "project-meta.json",
   };
 
   return {
@@ -117,6 +116,6 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
     allowedExtensions: [...DEFAULT_ALLOWED_EXTENSIONS],
     provider,
     features: {},
-    rules,
+    skill,
   };
 }

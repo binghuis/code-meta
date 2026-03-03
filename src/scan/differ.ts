@@ -8,7 +8,7 @@ import type {
   DirDiff,
   DirStatus,
   ScanResult,
-} from "./types";
+} from "../core/types";
 
 export interface DifferOptions {
   force?: boolean;

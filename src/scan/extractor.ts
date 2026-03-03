@@ -4,7 +4,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ROOT } from "./constants";
+import { ROOT } from "../core/constants";
 
 export interface ExtractedFile {
   name: string;

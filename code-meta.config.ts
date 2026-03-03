@@ -1,4 +1,4 @@
-import type { CodeMetaConfig } from "./src/config";
+import type { CodeMetaConfig } from "./src/core/config";
 
 export default {
   include: ["src"],

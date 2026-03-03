@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * code-meta CLI: scan, analyze, emit Cursor rules.
+ * code-meta CLI: scan, analyze, emit Skill 资源（project-meta.json）.
  */
 
 import "dotenv/config";
@@ -14,12 +14,12 @@ const pkg: { version?: string } = require(
 
 const USAGE = `code-meta [path] [options]
 
-  根据源码生成 Cursor Rules，供 AI 编码助手理解项目上下文。
+  根据源码生成 Cursor Skill 资源（project-meta.json），供 AI 理解项目结构、目录与文件职责。
 
 Commands / Options:
   [path]           可选，仅分析该路径下目录（如 src/modules/payment）
   --dry-run         仅扫描与 diff，显示将要分析的目录与预估 token，不调用 API
-  --emit-only       仅从缓存重新生成 .mdc 规则文件，不调用 API
+  --emit-only       仅从缓存重新生成 project-meta.json，不调用 API
   --force           忽略缓存，全量重新分析
   --depth=N         仅分析目录深度不超过 N 层（从项目根算）
   -h, --help        显示帮助
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 
   try {
     if (args.emitOnly) {
-      consola.info("Emit only: 从缓存生成规则...");
+      consola.info("Emit only: 从缓存生成项目元信息...");
       const result = await runPipeline({
         emitOnly: true,
       });
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
         consola.warn("未找到缓存，请先运行一次 code-meta 进行分析。");
         process.exit(1);
       }
-      consola.success("规则已写入 .cursor/rules/code-meta/");
+      consola.success("项目元信息已写入 .cursor/skills/code-meta/");
       return;
     }
 
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
           `预估 Token：约 ${estimatedInputTokens} input，${estimatedOutputTokens} output`,
         );
         consola.log(
-          "执行 code-meta（不加 --dry-run）将调用 API 并写入缓存与规则。",
+          "执行 code-meta（不加 --dry-run）将调用 API 并写入缓存与 Skill 元信息。",
         );
       }
       return;
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    consola.success("完成。规则已写入 .cursor/rules/code-meta/");
+    consola.success("完成。项目元信息已写入 .cursor/skills/code-meta/");
   } catch (err) {
     consola.error(err);
     process.exit(1);

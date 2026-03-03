@@ -111,11 +111,23 @@ export interface FeatureConfig {
   description?: string;
 }
 
-/** Rules output options. */
-export interface RulesConfig {
+/** Skill output options: where to write project-meta.json and SKILL.md. */
+export interface SkillConfig {
   outputDir?: string;
-  maxRuleLength?: number;
-  projectOverview?: boolean;
+  metaFileName?: string;
+}
+
+/** One directory entry in project-meta.json (simplified). */
+export interface ProjectMetaDirEntry {
+  summary: string;
+  files: Array<{ path: string; purpose: string; exports: string[] }>;
+}
+
+/** Root structure of project-meta.json (Skill resource). */
+export interface ProjectMeta {
+  generatedAt: string;
+  directories: Record<string, ProjectMetaDirEntry>;
+  features?: Record<string, { description: string; globs: string[]; body: string }>;
 }
 
 /** Full code-meta configuration. */
@@ -125,7 +137,7 @@ export interface CodeMetaConfig {
   allowedExtensions?: string[];
   provider: ProviderConfig;
   features?: Record<string, FeatureConfig>;
-  rules?: RulesConfig;
+  skill?: SkillConfig;
 }
 
 /** Human override for a single directory (partial DirAnalysis). */
