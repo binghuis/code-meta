@@ -4,7 +4,7 @@
 
 import type { CodeMetaConfig, FeatureRuleContent } from "./types";
 import { consola } from "consola";
-import { chat, type ChatMessage } from "./provider";
+import { chat, extractJsonFromModelResponse, type ChatMessage } from "./provider";
 import { extractFileContent } from "./extractor";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -112,7 +112,8 @@ ${featureConfig.description ? `配置描述：${featureConfig.description}\n` : 
           },
         },
       });
-      const data = JSON.parse(raw) as {
+      const jsonStr = extractJsonFromModelResponse(raw);
+      const data = JSON.parse(jsonStr) as {
         summary: string;
         scenarios: string[];
         keyPoints: string[];

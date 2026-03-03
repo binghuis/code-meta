@@ -112,3 +112,11 @@ export async function chat(
   }
   throw lastError ?? new Error("API 请求失败");
 }
+
+/** 从模型返回中提取 JSON 字符串（兼容 ```json ... ``` 或 ``` ... ``` 包裹） */
+export function extractJsonFromModelResponse(raw: string): string {
+  const trimmed = raw.trim();
+  const codeBlock = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/;
+  const m = trimmed.match(codeBlock);
+  return m ? m[1]!.trim() : trimmed;
+}

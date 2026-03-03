@@ -130,11 +130,17 @@ npm install
 # 构建
 npm run build
 
-# 全量自测（Vitest）
+# 全量自测（Vitest，不含真实 API）
 npm run test
 
 # 监听模式
 npm run test:watch
+
+# 端到端（Mock API，无需豆包密钥）
+npm run test:e2e:mock
+
+# 端到端（真实豆包 API，需配置 .env 中 ARK_API_KEY 且先 npm run build）
+npm run test:e2e
 ```
 
 ## License

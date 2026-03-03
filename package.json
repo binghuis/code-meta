@@ -20,6 +20,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run test/e2e-real.spec.ts",
+    "test:e2e:mock": "vitest run test/e2e-mock.test.ts",
     "code-meta": "node dist/cli.js"
   },
   "bugs": "https://github.com/binghuis/code-meta/issues",
@@ -28,6 +30,7 @@
     "test": {
       "environment": "node",
       "include": ["test/**/*.test.ts"],
+      "exclude": ["**/node_modules/**", "**/dist/**"],
       "globals": false
     }
   },

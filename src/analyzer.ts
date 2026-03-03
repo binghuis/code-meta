@@ -11,7 +11,7 @@ import type {
   DirNode,
 } from "./types";
 import { consola } from "consola";
-import { chat, type ChatMessage } from "./provider";
+import { chat, extractJsonFromModelResponse, type ChatMessage } from "./provider";
 import { extractDirectoryContents } from "./extractor";
 import * as cache from "./cache";
 
@@ -189,7 +189,8 @@ ${childSummaries.length ? "子目录摘要：\n" + childSummaries.join("\n") + "
         },
       },
     });
-    return JSON.parse(raw) as DirAnalysis;
+    const jsonStr = extractJsonFromModelResponse(raw);
+    return JSON.parse(jsonStr) as DirAnalysis;
   } catch (err) {
     consola.warn(
       `分析目录失败 [${dirPath}]，本次跳过缓存写入:`,
