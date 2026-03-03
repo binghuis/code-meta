@@ -8,7 +8,9 @@ import path from "node:path";
 import { consola } from "consola";
 import { runPipeline } from "./pipeline";
 
-const pkg: { version?: string } = require(path.join(__dirname, "..", "package.json"));
+const pkg: { version?: string } = require(
+  path.join(__dirname, "..", "package.json"),
+);
 
 const USAGE = `code-meta [path] [options]
 
@@ -102,12 +104,23 @@ async function main(): Promise<void> {
         consola.warn("扫描未产生目录。");
         process.exit(0);
       }
-      const { scanResult, diffResult, estimatedInputTokens = 0, estimatedOutputTokens = 0 } = result;
+      const {
+        scanResult,
+        diffResult,
+        estimatedInputTokens = 0,
+        estimatedOutputTokens = 0,
+      } = result;
       consola.log(`扫描完成：${scanResult.dirPaths.length} 个目录`);
-      consola.log(`待分析：${diffResult.toAnalyze.length} 个目录（跳过 ${diffResult.toSkip.length}）`);
+      consola.log(
+        `待分析：${diffResult.toAnalyze.length} 个目录（跳过 ${diffResult.toSkip.length}）`,
+      );
       if (diffResult.toAnalyze.length > 0) {
-        consola.log(`预估 Token：约 ${estimatedInputTokens} input，${estimatedOutputTokens} output`);
-        consola.log("执行 code-meta（不加 --dry-run）将调用 API 并写入缓存与规则。");
+        consola.log(
+          `预估 Token：约 ${estimatedInputTokens} input，${estimatedOutputTokens} output`,
+        );
+        consola.log(
+          "执行 code-meta（不加 --dry-run）将调用 API 并写入缓存与规则。",
+        );
       }
       return;
     }
@@ -122,8 +135,14 @@ async function main(): Promise<void> {
       },
     });
 
-    if (result.diffResult && result.diffResult.toAnalyze.length > 0 && !result.cacheData) {
-      consola.warn("未配置 API Key，无法进行分析。请在 .env 或 code-meta.config 中配置 provider.apiKey。");
+    if (
+      result.diffResult &&
+      result.diffResult.toAnalyze.length > 0 &&
+      !result.cacheData
+    ) {
+      consola.warn(
+        "未配置 API Key，无法进行分析。请在 .env 或 code-meta.config 中配置 provider.apiKey。",
+      );
       process.exit(1);
     }
 

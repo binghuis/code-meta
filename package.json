@@ -18,12 +18,15 @@
     "dev": "tsup --watch",
     "build": "tsup",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "code-meta": "node dist/cli.js"
   },
   "bugs": "https://github.com/binghuis/code-meta/issues",
   "homepage": "https://github.com/binghuis/code-meta",
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "vitest": "^3.2.4",
     "@types/node": "^25.2.0",
     "eslint": "^9.39.2",
     "globals": "^17.3.0",

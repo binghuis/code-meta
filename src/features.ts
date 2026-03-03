@@ -63,7 +63,8 @@ export async function analyzeFeatures(
     files = files.slice(0, MAX_FILES_PER_FEATURE);
     if (files.length === 0) {
       result.set(name, {
-        description: featureConfig.description ?? `功能「${name}」相关代码上下文`,
+        description:
+          featureConfig.description ?? `功能「${name}」相关代码上下文`,
         globs,
         body: "未匹配到文件，暂不生成分析内容。",
       });
@@ -79,7 +80,8 @@ export async function analyzeFeatures(
       const rel = files[i]!;
       const { content } = extractions[i]!;
       const budget = MAX_CHARS_PER_FEATURE - totalChars;
-      const slice = content.length <= budget ? content : content.slice(0, budget);
+      const slice =
+        content.length <= budget ? content : content.slice(0, budget);
       parts.push(`--- ${rel} ---\n${slice}`);
       totalChars += slice.length;
     }
@@ -122,12 +124,16 @@ ${featureConfig.description ? `配置描述：${featureConfig.description}\n` : 
       ].join("\n\n");
 
       result.set(name, {
-        description: featureConfig.description ?? `功能「${name}」相关代码上下文`,
+        description:
+          featureConfig.description ?? `功能「${name}」相关代码上下文`,
         globs: globs,
         body,
       });
     } catch (err) {
-      consola.warn(`功能「${name}」分析失败，使用占位:`, err instanceof Error ? err.message : String(err));
+      consola.warn(
+        `功能「${name}」分析失败，使用占位:`,
+        err instanceof Error ? err.message : String(err),
+      );
       result.set(name, {
         description: featureConfig.description ?? `功能「${name}」`,
         globs,

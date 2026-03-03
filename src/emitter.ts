@@ -2,7 +2,12 @@
  * Stage 4: Emit .cursor/rules/code-meta/*.mdc from cache + overrides.
  */
 
-import type { CacheData, CodeMetaConfig, DirAnalysis, OverridesMap } from "./types";
+import type {
+  CacheData,
+  CodeMetaConfig,
+  DirAnalysis,
+  OverridesMap,
+} from "./types";
 import { getMergedAnalysis } from "./overrides";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,19 +19,20 @@ function pathToRuleName(dirPath: string): string {
   return dirPath.replace(/\//g, "--");
 }
 
-function buildRuleContent(
-  analysis: DirAnalysis,
-  maxLength: number,
-): string {
+function buildRuleContent(analysis: DirAnalysis, maxLength: number): string {
   const sections: string[] = [];
 
   sections.push("## 目录职责\n" + analysis.summary);
   sections.push("## 业务领域\n" + analysis.businessDomain);
   if (analysis.scenarios.length > 0) {
-    sections.push("## 使用场景\n" + analysis.scenarios.map((s) => `- ${s}`).join("\n"));
+    sections.push(
+      "## 使用场景\n" + analysis.scenarios.map((s) => `- ${s}`).join("\n"),
+    );
   }
   if (analysis.conventions.length > 0) {
-    sections.push("## 编码约定\n" + analysis.conventions.map((c) => `- ${c}`).join("\n"));
+    sections.push(
+      "## 编码约定\n" + analysis.conventions.map((c) => `- ${c}`).join("\n"),
+    );
   }
   if (analysis.files.length > 0) {
     const table =
@@ -126,7 +132,9 @@ export async function emit(options: EmitOptions): Promise<void> {
       description,
       globs: [glob],
     };
-    writePromises.push(writeRuleFile(absOutputDir, ruleName, frontmatter, body));
+    writePromises.push(
+      writeRuleFile(absOutputDir, ruleName, frontmatter, body),
+    );
     written.add(ruleName);
   }
 
@@ -136,7 +144,11 @@ export async function emit(options: EmitOptions): Promise<void> {
     const rootPath = Object.keys(cacheData.directories).sort(byDepth)[0];
     const rootCached = rootPath ? cacheData.directories[rootPath] : null;
     if (rootCached?.analysis) {
-      const analysis = getMergedAnalysis(rootPath ?? ".", rootCached.analysis, overrides);
+      const analysis = getMergedAnalysis(
+        rootPath ?? ".",
+        rootCached.analysis,
+        overrides,
+      );
       const body = buildRuleContent(analysis, maxLength);
       const overviewFrontmatter: Record<string, unknown> = {
         description: "项目整体架构与模块概览",
@@ -144,7 +156,12 @@ export async function emit(options: EmitOptions): Promise<void> {
         alwaysApply: false,
       };
       writePromises.push(
-        writeRuleFile(absOutputDir, "_project-overview.mdc", overviewFrontmatter, body),
+        writeRuleFile(
+          absOutputDir,
+          "_project-overview.mdc",
+          overviewFrontmatter,
+          body,
+        ),
       );
       written.add("_project-overview.mdc");
     }
@@ -161,7 +178,9 @@ export async function emit(options: EmitOptions): Promise<void> {
     existingFiles.delete(pathToRuleName(dirPath) + ".mdc");
   }
 
-  const deletedRuleNames = new Set(dirsToDelete.map((dirPath) => pathToRuleName(dirPath) + ".mdc"));
+  const deletedRuleNames = new Set(
+    dirsToDelete.map((dirPath) => pathToRuleName(dirPath) + ".mdc"),
+  );
   const staleNames = [...existingFiles].filter((name) => {
     if (written.has(name)) return false;
     if (isManagedSpecialRule(name)) return true;

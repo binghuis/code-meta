@@ -1,5 +1,5 @@
 {
-  "include": ["src"],
+  "include": ["src", "test"],
   "compilerOptions": {
     "types": ["node"],
     "target": "ES2017",

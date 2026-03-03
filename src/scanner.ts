@@ -17,7 +17,14 @@ import path from "node:path";
 import fg from "fast-glob";
 import { ROOT } from "./constants";
 const TRIVIAL_LINE_THRESHOLD = 20;
-const BARREL_NAMES = new Set(["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs"]);
+const BARREL_NAMES = new Set([
+  "index.ts",
+  "index.tsx",
+  "index.js",
+  "index.jsx",
+  "index.mjs",
+  "index.cjs",
+]);
 
 function buildPatterns(include: string[], extensions: string[]): string[] {
   const extPatterns = extensions.map((ext) => `**/*${ext}`);
@@ -119,7 +126,12 @@ export interface CachedFileMeta {
 async function fileMd5SizeAndLines(
   absPath: string,
   fallback?: CachedFileMeta,
-): Promise<{ md5: string; size: number; lines: number; mtimeMs: number } | null> {
+): Promise<{
+  md5: string;
+  size: number;
+  lines: number;
+  mtimeMs: number;
+} | null> {
   try {
     const stat = await fs.lstat(absPath);
     if (stat.isSymbolicLink() || !stat.isFile()) return null;
@@ -166,8 +178,13 @@ async function fileListBatch(
   rawFiles: string[],
   root: string,
   cachedFileMeta: Map<string, CachedFileMeta> = new Map(),
-): Promise<Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>> {
-  const result = new Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>();
+): Promise<
+  Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>
+> {
+  const result = new Map<
+    string,
+    { md5: string; size: number; lines: number; mtimeMs: number }
+  >();
   for (let i = 0; i < rawFiles.length; i += MD5_BATCH_SIZE) {
     const batch = rawFiles.slice(i, i + MD5_BATCH_SIZE);
     const entries = await Promise.all(
@@ -186,7 +203,10 @@ async function fileListBatch(
 
 /** Build dir -> list of md5 for all files under that dir (and descendants). O(files * depth). */
 function buildDirMd5Index(
-  fileList: Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>,
+  fileList: Map<
+    string,
+    { md5: string; size: number; lines: number; mtimeMs: number }
+  >,
 ): Map<string, string[]> {
   const index = new Map<string, string[]>();
   for (const [rel, info] of fileList) {
@@ -223,8 +243,7 @@ function detectTrivial(
 ): TrivialReason | undefined {
   if (files.length === 0) return undefined;
   if (totalLines < TRIVIAL_LINE_THRESHOLD) return "too-small";
-  const onlyBarrel =
-    files.length === 1 && BARREL_NAMES.has(files[0]!.name);
+  const onlyBarrel = files.length === 1 && BARREL_NAMES.has(files[0]!.name);
   if (onlyBarrel) return "barrel-only";
   const allDts = files.every((f) => f.name.endsWith(".d.ts"));
   if (allDts) return "type-only";
@@ -294,7 +313,9 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
 
   if (targetPath) {
     const targetNorm = normalizePath(targetPath).replace(/\/$/, "");
-    rawFiles = rawFiles.filter((f) => f === targetNorm || f.startsWith(targetNorm + "/"));
+    rawFiles = rawFiles.filter(
+      (f) => f === targetNorm || f.startsWith(targetNorm + "/"),
+    );
   }
   rawFiles = await applyGitignoreRules(rawFiles);
 
@@ -303,7 +324,14 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
 
   const dirToFiles = new Map<
     string,
-    Array<{ name: string; path: string; md5: string; size: number; lines: number; mtimeMs: number }>
+    Array<{
+      name: string;
+      path: string;
+      md5: string;
+      size: number;
+      lines: number;
+      mtimeMs: number;
+    }>
   >();
   const dirToSubdirs = new Map<string, Set<string>>();
 
@@ -327,7 +355,7 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
       md5: info.md5,
       size: info.size,
       lines: info.lines,
-        mtimeMs: info.mtimeMs,
+      mtimeMs: info.mtimeMs,
     });
   }
 
@@ -370,7 +398,12 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
 
     const totalLines = files.reduce((sum, f) => sum + (f.lines ?? 0), 0);
     const trivial = detectTrivial(
-      files.map(({ name, path: p, md5, size }) => ({ name, path: p, md5, size })),
+      files.map(({ name, path: p, md5, size }) => ({
+        name,
+        path: p,
+        md5,
+        size,
+      })),
       totalLines,
     );
     const node: DirNode = {
