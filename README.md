@@ -49,7 +49,7 @@ npx code-meta --force
 
 ```js
 module.exports = {
-  include: ["src"],
+  include: ["src"], // 扫描入口目录，单目录或多目录
   exclude: [], // 会与 .gitignore 解析结果合并
   allowedExtensions: [".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"],
   provider: {

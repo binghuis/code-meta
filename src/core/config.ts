@@ -73,6 +73,7 @@ export async function loadConfig(): Promise<LoadConfigResult> {
       const config: CodeMetaConfig = {
         ...defaultConfig,
         ...user,
+        include: user.include ?? defaultConfig.include,
         provider: {
           ...defaultConfig.provider,
           ...(user.provider ?? {}),
