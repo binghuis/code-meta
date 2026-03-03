@@ -5,8 +5,6 @@
 import type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
 import { consola } from "consola";
 import JoyCon from "joycon";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 export type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
 
@@ -46,26 +44,6 @@ const DEFAULT_EXCLUDE = [
   "*.config.cjs",
   "*.config.mjs",
 ] as const;
-
-async function parseGitignore(cwd: string): Promise<string[]> {
-  try {
-    const gitignorePath = path.join(cwd, ".gitignore");
-    const content = await fs.readFile(gitignorePath, "utf8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
-      .map((line) => {
-        const cleaned = line.replace(/\/$/, "");
-        if (cleaned.startsWith("/")) {
-          return `${cleaned.slice(1)}/**`;
-        }
-        return `**/${cleaned}/**`;
-      });
-  } catch {
-    return [];
-  }
-}
 
 function createConfigLoader() {
   return new JoyCon({
@@ -114,9 +92,6 @@ export async function loadConfig(): Promise<LoadConfigResult> {
 }
 
 export async function getDefaultConfig(): Promise<CodeMetaConfig> {
-  const cwd = process.cwd();
-  const gitignoreExcludes = await parseGitignore(cwd);
-
   const provider: ProviderConfig = {
     baseUrl:
       process.env["ARK_BASE_URL"] ??
@@ -138,7 +113,7 @@ export async function getDefaultConfig(): Promise<CodeMetaConfig> {
 
   return {
     include: ["src"],
-    exclude: [...gitignoreExcludes, ...DEFAULT_EXCLUDE],
+    exclude: [...DEFAULT_EXCLUDE],
     allowedExtensions: [...DEFAULT_ALLOWED_EXTENSIONS],
     provider,
     features: {},

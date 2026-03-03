@@ -38,6 +38,75 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+interface GitignoreRule {
+  pattern: string;
+  negate: boolean;
+}
+
+function toGitignoreRulePatterns(rawLine: string): GitignoreRule[] {
+  const trimmed = rawLine.trim();
+  if (!trimmed || trimmed.startsWith("#")) return [];
+
+  const negate = trimmed.startsWith("!");
+  const line = (negate ? trimmed.slice(1) : trimmed).replace(/\/$/, "");
+  if (!line) return [];
+
+  const anchored = line.startsWith("/");
+  const body = anchored ? line.slice(1) : line;
+  const hasSlash = body.includes("/");
+  const hasGlob = /[*?[\]{}]/.test(body);
+  const maybeDir = !hasGlob && !path.extname(body);
+
+  const patterns = (() => {
+    if (anchored) {
+      if (maybeDir) return [body, `${body}/**`];
+      return [body];
+    }
+    if (hasSlash) {
+      if (maybeDir) return [`**/${body}`, `**/${body}/**`];
+      return [`**/${body}`];
+    }
+    if (maybeDir) return [`**/${body}`, `**/${body}/**`];
+    return [`**/${body}`];
+  })();
+
+  return patterns.map((pattern) => ({ pattern, negate }));
+}
+
+async function applyGitignoreRules(rawFiles: string[]): Promise<string[]> {
+  const gitignorePath = path.join(ROOT, ".gitignore");
+  let content: string;
+  try {
+    content = await fs.readFile(gitignorePath, "utf8");
+  } catch {
+    return rawFiles;
+  }
+
+  const rules = content
+    .split("\n")
+    .flatMap((line) => toGitignoreRulePatterns(line));
+  if (rules.length === 0 || rawFiles.length === 0) return rawFiles;
+
+  const universe = new Set(rawFiles);
+  const selected = new Set(rawFiles);
+  for (const rule of rules) {
+    const matched = await fg([rule.pattern], {
+      cwd: ROOT,
+      onlyFiles: true,
+      absolute: false,
+      dot: true,
+      followSymbolicLinks: false,
+    });
+    for (const rel of matched.map(normalizePath)) {
+      if (!universe.has(rel)) continue;
+      if (rule.negate) selected.add(rel);
+      else selected.delete(rel);
+    }
+  }
+
+  return rawFiles.filter((f) => selected.has(f));
+}
+
 const MD5_BATCH_SIZE = 50;
 
 export interface CachedFileMeta {
@@ -227,6 +296,7 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
     const targetNorm = normalizePath(targetPath).replace(/\/$/, "");
     rawFiles = rawFiles.filter((f) => f === targetNorm || f.startsWith(targetNorm + "/"));
   }
+  rawFiles = await applyGitignoreRules(rawFiles);
 
   const fileList = await fileListBatch(rawFiles, ROOT, options.cachedFileMeta);
   const dirMd5Index = buildDirMd5Index(fileList);
