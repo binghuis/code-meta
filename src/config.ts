@@ -1,17 +1,15 @@
+/**
+ * Configuration loading: code-meta.config.* + .gitignore parsing.
+ */
+
+import type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
 import JoyCon from "joycon";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export interface CodeMetaConfig {
-  exclude?: string[];
-  allowedExtensions?: string[];
-  arkApiKey?: string;
-  arkBaseUrl?: string;
-  arkModel?: string;
-  apiTimeout?: number;
-}
+export type { CodeMetaConfig, ProviderConfig, RulesConfig } from "./types";
 
-/** 默认参与扫描的扩展名 */
+/** Default extensions to scan. */
 export const DEFAULT_ALLOWED_EXTENSIONS = [
   ".ts",
   ".tsx",
@@ -22,7 +20,7 @@ export const DEFAULT_ALLOWED_EXTENSIONS = [
   ".cjs",
 ] as const;
 
-/** 默认排除的目录/文件模式（不含 .gitignore 解析结果） */
+/** Default exclude patterns (before .gitignore). */
 const DEFAULT_EXCLUDE = [
   "node_modules",
   "dist",
@@ -48,24 +46,16 @@ const DEFAULT_EXCLUDE = [
   "*.config.mjs",
 ] as const;
 
-/**
- * 读取 .gitignore 文件并解析排除规则
- */
 async function parseGitignore(cwd: string): Promise<string[]> {
   try {
     const gitignorePath = path.join(cwd, ".gitignore");
     const content = await fs.readFile(gitignorePath, "utf8");
-
     return content
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#")) // 移除空行和注释
+      .filter((line) => line && !line.startsWith("#"))
       .map((line) => {
-        // 转换 gitignore 模式为 glob 模式
-        // foo -> **/foo/**
-        // foo/ -> **/foo/**
-        // /foo -> foo/**
-        const cleaned = line.replace(/\/$/, ""); // 移除末尾斜杠
+        const cleaned = line.replace(/\/$/, "");
         if (cleaned.startsWith("/")) {
           return `${cleaned.slice(1)}/**`;
         }
@@ -76,11 +66,8 @@ async function parseGitignore(cwd: string): Promise<string[]> {
   }
 }
 
-/**
- * 创建配置加载器实例
- */
 function createConfigLoader() {
-  const joycon = new JoyCon({
+  return new JoyCon({
     files: [
       "code-meta.config.ts",
       "code-meta.config.js",
@@ -90,62 +77,71 @@ function createConfigLoader() {
     ],
     cwd: process.cwd(),
   });
-
-  return joycon;
 }
 
-/**
- * 加载配置文件
- * @returns 配置对象和配置文件路径
- */
-export async function loadConfig(): Promise<{
+export interface LoadConfigResult {
   config: CodeMetaConfig;
   configPath: string | null;
-}> {
+}
+
+export async function loadConfig(): Promise<LoadConfigResult> {
   const joycon = createConfigLoader();
+  const defaultConfig = await getDefaultConfig();
 
   try {
     const result = await joycon.load();
-    if (result) {
-      const config = (result.data || {}) as CodeMetaConfig;
-      const defaultConfig = await getDefaultConfig();
-      return {
-        config: {
-          ...defaultConfig,
-          ...config,
+    if (result && result.data) {
+      const user = (result.data || {}) as Partial<CodeMetaConfig>;
+      const config: CodeMetaConfig = {
+        ...defaultConfig,
+        ...user,
+        provider: {
+          ...defaultConfig.provider,
+          ...(user.provider ?? {}),
         },
-        configPath: result.path || null,
+        rules: user.rules
+          ? { ...defaultConfig.rules, ...user.rules }
+          : defaultConfig.rules,
+        features: user.features ?? defaultConfig.features,
       };
+      return { config, configPath: result.path ?? null };
     }
-
-    // 如果没有找到配置文件，返回默认配置
-    return {
-      config: await getDefaultConfig(),
-      configPath: null,
-    };
+    return { config: defaultConfig, configPath: null };
   } catch (error) {
     console.warn("Failed to load config file, using defaults:", error);
-    return {
-      config: await getDefaultConfig(),
-      configPath: null,
-    };
+    return { config: defaultConfig, configPath: null };
   }
 }
 
-/**
- * 获取默认配置
- */
 export async function getDefaultConfig(): Promise<CodeMetaConfig> {
   const cwd = process.cwd();
   const gitignoreExcludes = await parseGitignore(cwd);
 
+  const provider: ProviderConfig = {
+    baseUrl:
+      process.env["ARK_BASE_URL"] ??
+      process.env["OPENAI_BASE_URL"] ??
+      "https://ark.cn-beijing.volces.com/api/v3",
+    apiKey: process.env["ARK_API_KEY"] ?? process.env["OPENAI_API_KEY"] ?? "",
+    model:
+      process.env["ARK_MODEL"] ??
+      process.env["OPENAI_MODEL"] ??
+      "doubao-seed-1-8-251228",
+    timeout: 90000,
+  };
+
+  const rules: RulesConfig = {
+    outputDir: ".cursor/rules/code-meta",
+    maxRuleLength: 800,
+    projectOverview: true,
+  };
+
   return {
+    include: ["src"],
     exclude: [...gitignoreExcludes, ...DEFAULT_EXCLUDE],
     allowedExtensions: [...DEFAULT_ALLOWED_EXTENSIONS],
-    arkApiKey: process.env["ARK_API_KEY"],
-    arkBaseUrl:
-      process.env["ARK_BASE_URL"] || "https://ark.cn-beijing.volces.com/api/v3",
-    arkModel: process.env["ARK_MODEL"] || "doubao-seed-1-8-251228",
-    apiTimeout: 90000,
+    provider,
+    features: {},
+    rules,
   };
 }
