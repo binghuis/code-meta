@@ -1,63 +1,24 @@
 /**
- * Stage 1: Scan source tree, build DirNode tree with md5 and fingerprint.
+ * FSD-aware scanner: build tree with FsdPosition, compute fingerprints.
  */
 
-import type {
-  CodeMetaConfig,
-  DirNode,
-  FileNode,
-  ScanResult,
-  TrivialReason,
-} from "../core/types";
-import { consola } from "consola";
+import type { CodeMetaConfig, FsdFileNode, FsdScanResult, FsdTreeNode } from "../core/types";
+import type { FsdLayer, FsdPosition } from "../fsd/types";
+import type { FsdStructure } from "../fsd/detect";
+
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+import { consola } from "consola";
 import fg from "fast-glob";
 import ig from "ignore";
+
 import { ROOT } from "../core/constants";
-const TRIVIAL_LINE_THRESHOLD = 20;
-const BARREL_NAMES = new Set([
-  "index.ts",
-  "index.tsx",
-  "index.js",
-  "index.jsx",
-  "index.mjs",
-  "index.cjs",
-]);
+import { resolvePosition } from "../fsd/detect";
+import { SLICED_LAYERS } from "../fsd/types";
 
-function buildPatterns(include: string[], extensions: string[]): string[] {
-  const extPatterns = extensions.map((ext) => `**/*${ext}`);
-  return include.flatMap((inc) =>
-    extPatterns.map((pat) => (inc === "." ? pat : `${inc}/${pat}`)),
-  );
-}
-
-function buildIgnore(exclude: string[]): string[] {
-  return exclude.map((entry) => {
-    const prefix = entry.startsWith("**/") ? "" : "**/";
-    const suffix = entry.includes("*") ? "" : "/**";
-    return `${prefix}${entry}${suffix}`;
-  });
-}
-
-function normalizePath(p: string): string {
-  return p.replace(/\\/g, "/");
-}
-
-async function applyGitignoreRules(rawFiles: string[]): Promise<string[]> {
-  const gitignorePath = path.join(ROOT, ".gitignore");
-  let content: string;
-  try {
-    content = await fs.readFile(gitignorePath, "utf8");
-  } catch {
-    return rawFiles;
-  }
-  const filter = ig().add(content);
-  return rawFiles.filter((f) => !filter.ignores(f));
-}
-
-const MD5_BATCH_SIZE = 50;
+const MD5_BATCH = 50;
 
 export interface CachedFileMeta {
   md5: string;
@@ -66,32 +27,47 @@ export interface CachedFileMeta {
   lines?: number;
 }
 
-async function fileMd5SizeAndLines(
+export interface ScanOptions {
+  config: CodeMetaConfig;
+  fsdStructure: FsdStructure;
+  targetPath?: string;
+  cachedFileMeta?: Map<string, CachedFileMeta>;
+}
+
+// ── helpers ─────────────────────────────────────────────────────
+
+function norm(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+async function applyGitignore(files: string[]): Promise<string[]> {
+  try {
+    const content = await fs.readFile(path.join(ROOT, ".gitignore"), "utf8");
+    const filter = ig().add(content);
+    return files.filter((f) => !filter.ignores(f));
+  } catch {
+    return files;
+  }
+}
+
+async function fileMeta(
   absPath: string,
-  fallback?: CachedFileMeta,
-): Promise<{
-  md5: string;
-  size: number;
-  lines: number;
-  mtimeMs: number;
-} | null> {
+  cached?: CachedFileMeta,
+): Promise<{ md5: string; size: number; lines: number; mtimeMs: number } | null> {
   try {
     const stat = await fs.lstat(absPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) return null;
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+
     if (
-      fallback &&
-      typeof fallback.mtimeMs === "number" &&
-      typeof fallback.lines === "number" &&
-      fallback.size === stat.size &&
-      Math.abs(fallback.mtimeMs - stat.mtimeMs) < 1
+      cached &&
+      typeof cached.mtimeMs === "number" &&
+      typeof cached.lines === "number" &&
+      cached.size === stat.size &&
+      Math.abs(cached.mtimeMs - stat.mtimeMs) < 1
     ) {
-      return {
-        md5: fallback.md5,
-        size: fallback.size,
-        lines: fallback.lines,
-        mtimeMs: fallback.mtimeMs,
-      };
+      return { md5: cached.md5, size: cached.size, lines: cached.lines, mtimeMs: cached.mtimeMs };
     }
+
     const buf = await fs.readFile(absPath);
     const md5 = crypto.createHash("md5").update(buf).digest("hex");
     let lines = 0;
@@ -101,266 +77,257 @@ async function fileMd5SizeAndLines(
     lines += 1;
     return { md5, size: stat.size, lines, mtimeMs: stat.mtimeMs };
   } catch (err) {
-    consola.warn(
-      `读取文件失败，已跳过: ${absPath}`,
-      err instanceof Error ? err.message : String(err),
-    );
+    consola.warn(`读取文件失败: ${absPath}`, err instanceof Error ? err.message : String(err));
     return null;
   }
 }
 
-async function fileListBatch(
-  rawFiles: string[],
-  root: string,
-  cachedFileMeta: Map<string, CachedFileMeta> = new Map(),
-): Promise<
-  Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>
-> {
-  const result = new Map<
-    string,
-    { md5: string; size: number; lines: number; mtimeMs: number }
-  >();
-  for (let i = 0; i < rawFiles.length; i += MD5_BATCH_SIZE) {
-    const batch = rawFiles.slice(i, i + MD5_BATCH_SIZE);
-    const entries = await Promise.all(
-      batch.map(async (rel) => {
-        const abs = path.join(root, rel);
-        const info = await fileMd5SizeAndLines(abs, cachedFileMeta.get(rel));
-        return [rel, info] as const;
-      }),
-    );
-    for (const [rel, info] of entries) {
-      if (info) result.set(rel, info);
-    }
-  }
-  return result;
-}
-
-/** Build dir -> list of md5 for all files under that dir (and descendants). O(files * depth). */
-function buildDirMd5Index(
-  fileList: Map<
-    string,
-    { md5: string; size: number; lines: number; mtimeMs: number }
-  >,
-): Map<string, string[]> {
-  const index = new Map<string, string[]>();
-  for (const [rel, info] of fileList) {
-    const dir = path.dirname(rel);
-    if (dir === "." || dir === "") {
-      const list = index.get(".") ?? [];
-      list.push(info.md5);
-      index.set(".", list);
-    } else {
-      const rootList = index.get(".") ?? [];
-      rootList.push(info.md5);
-      index.set(".", rootList);
-      const parts = dir.split("/").filter(Boolean);
-      for (let i = 1; i <= parts.length; i++) {
-        const ancestor = parts.slice(0, i).join("/");
-        const list = index.get(ancestor) ?? [];
-        list.push(info.md5);
-        index.set(ancestor, list);
-      }
-    }
-  }
-  return index;
-}
-
-function computeFingerprint(md5s: string[]): string {
+function fingerprint(md5s: string[]): string {
   const sorted = [...md5s].sort();
   return crypto.createHash("md5").update(sorted.join("")).digest("hex");
 }
 
-/** Detect trivial reason for a directory. */
-function detectTrivial(
-  files: Array<{ name: string; path: string; md5: string; size: number }>,
-  totalLines: number,
-): TrivialReason | undefined {
-  if (files.length === 0) return undefined;
-  if (totalLines < TRIVIAL_LINE_THRESHOLD) return "too-small";
-  const onlyBarrel = files.length === 1 && BARREL_NAMES.has(files[0]!.name);
-  if (onlyBarrel) return "barrel-only";
-  const allDts = files.every((f) => f.name.endsWith(".d.ts"));
-  if (allDts) return "type-only";
-  return undefined;
-}
+// ── main scan ───────────────────────────────────────────────────
 
-function computeEffectiveRoot(
-  targetPath: string | undefined,
-  dirPaths: string[],
-): string {
-  if (targetPath != null && targetPath !== "") {
-    return normalizePath(targetPath).replace(/\/$/, "");
-  }
-  if (dirPaths.length === 0) return ".";
-  const first = dirPaths[0]!;
-  return first.includes("/") ? first.split("/")[0]! : ".";
-}
-
-function filterDirPaths(
-  dirPaths: string[],
-  targetPath: string | undefined,
-  depth: number | undefined,
-): string[] {
-  let out = dirPaths;
-  if (targetPath != null && targetPath !== "") {
-    const targetNorm = normalizePath(targetPath).replace(/\/$/, "");
-    out = out.filter((p) => p === targetNorm || p.startsWith(targetNorm + "/"));
-  }
-  if (depth !== undefined) {
-    out = out.filter((p) => p.split("/").filter(Boolean).length <= depth);
-  }
-  return out;
-}
-
-export interface ScanOptions {
-  config: CodeMetaConfig;
-  targetPath?: string;
-  depth?: number;
-  cachedFileMeta?: Map<string, CachedFileMeta>;
-}
-
-/**
- * Scan project and build tree. targetPath restricts to a subtree; depth limits directory depth from root.
- */
-export async function scan(options: ScanOptions): Promise<ScanResult> {
-  const { config, targetPath, depth } = options;
-  const include = config.include?.length ? config.include : ["src"];
-  const extensions =
-    (config.allowedExtensions?.length ?? 0) > 0
-      ? config.allowedExtensions!
-      : [".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"];
+export async function scan(options: ScanOptions): Promise<FsdScanResult> {
+  const { config, fsdStructure, targetPath } = options;
+  const { srcRoot } = fsdStructure;
+  const extensions = config.allowedExtensions?.length
+    ? config.allowedExtensions
+    : [".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs"];
   const exclude = config.exclude ?? [];
 
-  const patterns = buildPatterns(include, extensions);
-  const ignore = buildIgnore(exclude);
+  const layerNames = [...fsdStructure.layers.keys()];
+  const patterns = layerNames.flatMap((layer) =>
+    extensions.map((ext) => `${srcRoot}/${layer}/**/*${ext}`),
+  );
 
-  let rawFiles = await fg(patterns, {
-    cwd: ROOT,
-    absolute: false,
-    onlyFiles: true,
-    ignore,
-    dot: true,
-    followSymbolicLinks: false,
+  const ignorePatterns = exclude.map((e) => {
+    const prefix = e.startsWith("**/") ? "" : "**/";
+    const suffix = e.includes("*") ? "" : "/**";
+    return `${prefix}${e}${suffix}`;
   });
 
-  rawFiles = rawFiles.map(normalizePath);
+  let rawFiles = (
+    await fg(patterns, {
+      cwd: ROOT,
+      absolute: false,
+      onlyFiles: true,
+      ignore: ignorePatterns,
+      dot: true,
+      followSymbolicLinks: false,
+    })
+  ).map(norm);
 
   if (targetPath) {
-    const targetNorm = normalizePath(targetPath).replace(/\/$/, "");
-    rawFiles = rawFiles.filter(
-      (f) => f === targetNorm || f.startsWith(targetNorm + "/"),
+    const tp = norm(targetPath).replace(/\/$/, "");
+    const fullTarget = tp.startsWith(srcRoot + "/") ? tp : `${srcRoot}/${tp}`;
+    rawFiles = rawFiles.filter((f) => f === fullTarget || f.startsWith(fullTarget + "/"));
+  }
+
+  rawFiles = await applyGitignore(rawFiles);
+
+  const cachedMeta = options.cachedFileMeta ?? new Map<string, CachedFileMeta>();
+  const fileInfoMap = new Map<string, { md5: string; size: number; lines: number; mtimeMs: number }>();
+
+  for (let i = 0; i < rawFiles.length; i += MD5_BATCH) {
+    const batch = rawFiles.slice(i, i + MD5_BATCH);
+    const results = await Promise.all(
+      batch.map(async (rel) => {
+        const info = await fileMeta(path.join(ROOT, rel), cachedMeta.get(rel));
+        return [rel, info] as const;
+      }),
     );
-  }
-  rawFiles = await applyGitignoreRules(rawFiles);
-
-  const fileList = await fileListBatch(rawFiles, ROOT, options.cachedFileMeta);
-  const dirMd5Index = buildDirMd5Index(fileList);
-
-  const dirToFiles = new Map<
-    string,
-    Array<{
-      name: string;
-      path: string;
-      md5: string;
-      size: number;
-      lines: number;
-      mtimeMs: number;
-    }>
-  >();
-  const dirToSubdirs = new Map<string, Set<string>>();
-
-  for (const rel of fileList.keys()) {
-    const dir = path.dirname(rel);
-    const name = path.basename(rel);
-    const info = fileList.get(rel)!;
-    if (!dirToFiles.has(dir)) {
-      dirToFiles.set(dir, []);
-      const parts = dir.split("/").filter(Boolean);
-      for (let i = 0; i < parts.length; i++) {
-        const parent = parts.slice(0, i).join("/") || ".";
-        const child = parts[i]!;
-        if (!dirToSubdirs.has(parent)) dirToSubdirs.set(parent, new Set());
-        dirToSubdirs.get(parent)!.add(child);
-      }
+    for (const [rel, info] of results) {
+      if (info) fileInfoMap.set(rel, info);
     }
-    dirToFiles.get(dir)!.push({
-      name,
-      path: rel,
-      md5: info.md5,
-      size: info.size,
-      lines: info.lines,
-      mtimeMs: info.mtimeMs,
-    });
   }
 
-  const allDirs = new Set<string>(dirToFiles.keys());
-  for (const parent of dirToSubdirs.keys()) {
-    allDirs.add(parent);
-  }
-  const dirPaths = [...allDirs].sort();
-  const depthLimit = depth ?? 999;
-  const dirMap = new Map<string, DirNode>();
+  const layers = new Map<FsdLayer, FsdTreeNode>();
+  const nodeMap = new Map<string, FsdTreeNode>();
+  const analysisTargets: string[] = [];
 
-  async function buildNode(dirPath: string): Promise<DirNode> {
-    if (dirMap.has(dirPath)) return dirMap.get(dirPath)!;
-    const files = dirToFiles.get(dirPath) ?? [];
-    const subdirNames = dirToSubdirs.get(dirPath);
-    const children: (FileNode | DirNode)[] = [];
-
-    const fileNodes: FileNode[] = files.map((f) => ({
-      kind: "file",
-      name: f.name,
-      path: f.path,
-      md5: f.md5,
-      size: f.size,
-      mtimeMs: f.mtimeMs,
-      lines: f.lines,
-    }));
-    children.push(...fileNodes);
-
-    if (subdirNames) {
-      for (const name of [...subdirNames].sort()) {
-        const childPath = dirPath === "." ? name : `${dirPath}/${name}`;
-        const segments = childPath.split("/").filter(Boolean);
-        if (segments.length > depthLimit) continue;
-        children.push(await buildNode(childPath));
-      }
-    }
-
-    const allMd5s = dirMd5Index.get(dirPath) ?? [];
-    const fingerprint = computeFingerprint(allMd5s);
-
-    const totalLines = files.reduce((sum, f) => sum + (f.lines ?? 0), 0);
-    const trivial = detectTrivial(
-      files.map(({ name, path: p, md5, size }) => ({
-        name,
-        path: p,
-        md5,
-        size,
-      })),
-      totalLines,
+  for (const [layerName, _layerAbsPath] of fsdStructure.layers) {
+    const layerRelPath = `${srcRoot}/${layerName}`;
+    const layerFiles = [...fileInfoMap.entries()].filter(([rel]) =>
+      rel.startsWith(layerRelPath + "/"),
     );
-    const node: DirNode = {
-      kind: "dir",
-      name: dirPath === "." ? "." : path.basename(dirPath),
-      path: dirPath,
-      fingerprint,
-      children,
-      ...(trivial ? { trivial } : {}),
-    };
-    dirMap.set(dirPath, node);
-    return node;
+
+    if (layerFiles.length === 0) continue;
+
+    const layerPos: FsdPosition = { layer: layerName };
+
+    if (SLICED_LAYERS.has(layerName)) {
+      const sliceMap = new Map<string, Array<[string, typeof layerFiles[0][1]]>>();
+      for (const [rel, info] of layerFiles) {
+        const pos = resolvePosition(rel, srcRoot);
+        if (!pos?.slice) continue;
+        const sliceKey = `${layerRelPath}/${pos.slice}`;
+        const list = sliceMap.get(sliceKey) ?? [];
+        list.push([rel, info]);
+        sliceMap.set(sliceKey, list);
+      }
+
+      const sliceNodes: FsdTreeNode[] = [];
+      for (const [slicePath, sliceFiles] of [...sliceMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const sliceName = path.basename(slicePath);
+        const slicePos: FsdPosition = { layer: layerName, slice: sliceName };
+
+        const segmentMap = new Map<string, Array<[string, typeof sliceFiles[0][1]]>>();
+        const rootFiles: Array<[string, typeof sliceFiles[0][1]]> = [];
+
+        for (const [rel, info] of sliceFiles) {
+          const pos = resolvePosition(rel, srcRoot)!;
+          if (pos.segment) {
+            const segKey = `${slicePath}/${pos.segment}`;
+            const list = segmentMap.get(segKey) ?? [];
+            list.push([rel, info]);
+            segmentMap.set(segKey, list);
+          } else {
+            rootFiles.push([rel, info]);
+          }
+        }
+
+        const children: Array<FsdTreeNode | FsdFileNode> = [];
+
+        for (const [segPath, segFiles] of [...segmentMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+          const segName = path.basename(segPath);
+          const segPos: FsdPosition = { layer: layerName, slice: sliceName, segment: segName };
+
+          const fileNodes: FsdFileNode[] = segFiles.map(([rel, info]) => ({
+            kind: "file" as const,
+            name: path.basename(rel),
+            path: rel,
+            fsd: segPos,
+            md5: info.md5,
+            size: info.size,
+            lines: info.lines,
+            mtimeMs: info.mtimeMs,
+          }));
+
+          const segNode: FsdTreeNode = {
+            kind: "segment",
+            name: segName,
+            path: segPath,
+            fsd: segPos,
+            fingerprint: fingerprint(fileNodes.map((f) => f.md5)),
+            children: fileNodes,
+          };
+          nodeMap.set(segPath, segNode);
+          children.push(segNode);
+        }
+
+        for (const [rel, info] of rootFiles) {
+          children.push({
+            kind: "file" as const,
+            name: path.basename(rel),
+            path: rel,
+            fsd: slicePos,
+            md5: info.md5,
+            size: info.size,
+            lines: info.lines,
+            mtimeMs: info.mtimeMs,
+          });
+        }
+
+        const allMd5s = sliceFiles.map(([, info]) => info.md5);
+        const sliceNode: FsdTreeNode = {
+          kind: "slice",
+          name: sliceName,
+          path: slicePath,
+          fsd: slicePos,
+          fingerprint: fingerprint(allMd5s),
+          children,
+        };
+        nodeMap.set(slicePath, sliceNode);
+        sliceNodes.push(sliceNode);
+        analysisTargets.push(slicePath);
+      }
+
+      const allLayerMd5s = layerFiles.map(([, info]) => info.md5);
+      const layerNode: FsdTreeNode = {
+        kind: "layer",
+        name: layerName,
+        path: layerRelPath,
+        fsd: layerPos,
+        fingerprint: fingerprint(allLayerMd5s),
+        children: sliceNodes,
+      };
+      nodeMap.set(layerRelPath, layerNode);
+      layers.set(layerName, layerNode);
+    } else {
+      // Direct layer (app / shared): segments directly under layer
+      const segmentMap = new Map<string, Array<[string, typeof layerFiles[0][1]]>>();
+      const rootFiles: Array<[string, typeof layerFiles[0][1]]> = [];
+
+      for (const [rel, info] of layerFiles) {
+        const pos = resolvePosition(rel, srcRoot);
+        if (pos?.segment) {
+          const segKey = `${layerRelPath}/${pos.segment}`;
+          const list = segmentMap.get(segKey) ?? [];
+          list.push([rel, info]);
+          segmentMap.set(segKey, list);
+        } else {
+          rootFiles.push([rel, info]);
+        }
+      }
+
+      const children: Array<FsdTreeNode | FsdFileNode> = [];
+
+      for (const [segPath, segFiles] of [...segmentMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const segName = path.basename(segPath);
+        const segPos: FsdPosition = { layer: layerName, segment: segName };
+
+        const fileNodes: FsdFileNode[] = segFiles.map(([rel, info]) => ({
+          kind: "file" as const,
+          name: path.basename(rel),
+          path: rel,
+          fsd: segPos,
+          md5: info.md5,
+          size: info.size,
+          lines: info.lines,
+          mtimeMs: info.mtimeMs,
+        }));
+
+        const segNode: FsdTreeNode = {
+          kind: "segment",
+          name: segName,
+          path: segPath,
+          fsd: segPos,
+          fingerprint: fingerprint(fileNodes.map((f) => f.md5)),
+          children: fileNodes,
+        };
+        nodeMap.set(segPath, segNode);
+        children.push(segNode);
+      }
+
+      for (const [rel, info] of rootFiles) {
+        children.push({
+          kind: "file" as const,
+          name: path.basename(rel),
+          path: rel,
+          fsd: layerPos,
+          md5: info.md5,
+          size: info.size,
+          lines: info.lines,
+          mtimeMs: info.mtimeMs,
+        });
+      }
+
+      const allMd5s = layerFiles.map(([, info]) => info.md5);
+      const layerNode: FsdTreeNode = {
+        kind: "layer",
+        name: layerName,
+        path: layerRelPath,
+        fsd: layerPos,
+        fingerprint: fingerprint(allMd5s),
+        children,
+      };
+      nodeMap.set(layerRelPath, layerNode);
+      layers.set(layerName, layerNode);
+      analysisTargets.push(layerRelPath);
+    }
   }
 
-  const effectiveRoot = computeEffectiveRoot(targetPath, dirPaths);
-  const filteredDirPaths = filterDirPaths(dirPaths, targetPath, depth);
-  const root = dirPaths.length > 0 ? await buildNode(effectiveRoot) : null;
-
-  return {
-    root,
-    allDirPaths: dirPaths,
-    dirPaths: filteredDirPaths,
-    dirMap,
-  };
+  return { layers, analysisTargets: analysisTargets.sort(), nodeMap };
 }

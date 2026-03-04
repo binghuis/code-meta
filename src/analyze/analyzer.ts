@@ -1,209 +1,251 @@
 /**
- * Stage 3: Bottom-up AI analysis with topological order and smart skip.
+ * FSD-aware analyzer: dispatch analysis by FSD role (slice vs direct-layer).
  */
 
-import type {
-  CacheData,
-  CodeMetaConfig,
-  DirAnalysis,
-  DiffResult,
-  FileNode,
-  DirNode,
-} from "../core/types";
+import type { CacheData, CodeMetaConfig, FsdDiffResult, FsdFileNode, FsdScanResult, FsdTreeNode } from "../core/types";
+import type { AnalysisResult, FsdLayer, LayerDirectAnalysis, SliceAnalysis } from "../fsd/types";
+
 import { consola } from "consola";
 import pLimit from "p-limit";
-import { chat, extractJsonFromModelResponse, type ChatMessage } from "../provider";
-import { extractDirectoryContents } from "../scan/extractor";
-import * as cache from "../data/cache";
+
+import { SLICED_LAYERS } from "../fsd/types";
 import {
-  getDirAnalysisJsonSchema,
-  DirAnalysisSchema,
+  directLayerSystemPrompt,
+  directLayerUserPrompt,
+  sliceSystemPrompt,
+  sliceUserPrompt,
+} from "../fsd/prompts";
+import { chat, extractJsonFromModelResponse, type ChatMessage } from "../provider";
+import { extractDirectoryContents, extractPublicApi } from "../scan/extractor";
+import {
+  getLayerDirectJsonSchema,
+  getSliceJsonSchema,
+  LayerDirectAnalysisSchema,
+  SliceAnalysisSchema,
 } from "./schema";
+import * as cache from "../data/cache";
 
-function trivialAnalysis(dirPath: string, node: DirNode): DirAnalysis {
-  const fileNames = node.children
-    .filter((c) => c.kind === "file")
-    .map((c) => c.name);
-  const subdirNames = node.children
-    .filter((c) => c.kind === "dir")
-    .map((c) => c.name);
-  const reason = node.trivial ?? "too-small";
-  const summary =
-    reason === "barrel-only"
-      ? "模块导出入口（barrel file）。"
-      : reason === "type-only"
-        ? "类型声明目录。"
-        : "内容较少，未做详细分析。";
-  return {
-    summary,
-    businessDomain: "基础设施",
-    scenarios: [],
-    conventions: [],
-    files: fileNames.map((name) => ({ name, purpose: "", exports: [] })),
-    subdirs: subdirNames.map((name) => ({ name, summary: "" })),
-  };
-}
+const CONCURRENCY = 4;
+const INDEX_NAMES = new Set([
+  "index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs",
+]);
 
-/** Sort toAnalyze so that child dirs come before parents (deepest first). */
-function topologicalOrder(toAnalyze: string[]): string[] {
-  return [...toAnalyze].sort((a, b) => {
-    const depthA = a.split("/").filter(Boolean).length;
-    const depthB = b.split("/").filter(Boolean).length;
-    return depthB - depthA;
-  });
-}
+// ── helpers ─────────────────────────────────────────────────────
 
-const ANALYZE_BATCH_SIZE = 4;
-
-function groupByDepthDesc(paths: string[]): string[][] {
-  const byDepth = new Map<number, string[]>();
-  for (const p of paths) {
-    const depth = p.split("/").filter(Boolean).length;
-    const list = byDepth.get(depth) ?? [];
-    list.push(p);
-    byDepth.set(depth, list);
+function collectFiles(node: FsdTreeNode): FsdFileNode[] {
+  const files: FsdFileNode[] = [];
+  for (const child of node.children) {
+    if (child.kind === "file") {
+      files.push(child);
+    } else {
+      files.push(...collectFiles(child));
+    }
   }
-  return [...byDepth.keys()]
-    .sort((a, b) => b - a)
-    .map((depth) => byDepth.get(depth)!);
+  return files;
 }
 
-async function analyzeOneDirectory(
-  dirPath: string,
-  node: DirNode,
-  config: CodeMetaConfig,
-  cacheSnapshot: CacheData | null,
-): Promise<DirAnalysis | null> {
-  if (node.trivial) {
-    return trivialAnalysis(dirPath, node);
-  }
+function getSegmentNodes(node: FsdTreeNode): FsdTreeNode[] {
+  return node.children.filter((c): c is FsdTreeNode => c.kind === "segment");
+}
 
-  const files = node.children
-    .filter((c): c is FileNode => c.kind === "file")
-    .map((c) => ({ name: c.name, path: c.path }));
-  const extracted = await extractDirectoryContents(files);
+function findIndexFile(node: FsdTreeNode): FsdFileNode | undefined {
+  return node.children.find(
+    (c): c is FsdFileNode => c.kind === "file" && INDEX_NAMES.has(c.name),
+  );
+}
 
-  const subdirNames = node.children
-    .filter((c) => c.kind === "dir")
-    .map((c) => c.name);
-  const childSummaries: string[] = [];
-  for (const name of subdirNames) {
-    const childPath = dirPath === "." ? name : `${dirPath}/${name}`;
-    const cached = cacheSnapshot?.directories[childPath];
-    if (cached?.analysis?.summary) {
-      childSummaries.push(`${name}: ${cached.analysis.summary}`);
+async function buildFilesSection(node: FsdTreeNode): Promise<string> {
+  const segments = getSegmentNodes(node);
+  const parts: string[] = [];
+
+  for (const seg of segments) {
+    const files = collectFiles(seg).map((f) => ({ name: f.name, path: f.path }));
+    const extracted = await extractDirectoryContents(files);
+    for (const f of extracted) {
+      parts.push(`--- [${seg.name}] ${f.name} ---\n${f.content}${f.truncated ? "\n(已截断)" : ""}`);
     }
   }
 
-  const filesSection = extracted
-    .map(
-      (f) =>
-        `--- ${f.name} ---\n${f.content}${f.truncated ? "\n(已截断)" : ""}`,
-    )
-    .join("\n\n");
+  const rootFiles = node.children
+    .filter((c): c is FsdFileNode => c.kind === "file")
+    .map((f) => ({ name: f.name, path: f.path }));
+  if (rootFiles.length > 0) {
+    const extracted = await extractDirectoryContents(rootFiles);
+    for (const f of extracted) {
+      parts.push(`--- [root] ${f.name} ---\n${f.content}${f.truncated ? "\n(已截断)" : ""}`);
+    }
+  }
 
-  const userContent = `目录路径：${dirPath}
+  return parts.join("\n\n");
+}
 
-直接子目录：${subdirNames.length ? subdirNames.join("、") : "无"}
+// ── slice analysis ──────────────────────────────────────────────
 
-${childSummaries.length ? "子目录摘要：\n" + childSummaries.join("\n") + "\n\n" : ""}该目录下文件内容（可能截断）：\n\n${filesSection}
+async function analyzeSlice(
+  node: FsdTreeNode,
+  config: CodeMetaConfig,
+): Promise<SliceAnalysis | null> {
+  const layer = node.fsd.layer;
+  const sliceName = node.fsd.slice!;
+  const segmentNames = getSegmentNodes(node).map((s) => s.name);
+  const filesSection = await buildFilesSection(node);
 
-请根据实际内容分析，按 JSON schema 输出：summary（目录职责）、businessDomain、scenarios、conventions、files（name/purpose/exports）、subdirs（name/summary）。全部中文。`;
-
-  const systemContent =
-    "你是前端项目结构分析助手。根据目录路径、子目录摘要和文件源码内容，输出结构化的目录描述。描述必须基于实际代码，不要编造。全部使用中文。";
+  const indexFile = findIndexFile(node);
+  const publicApiNames = indexFile ? await extractPublicApi(indexFile.path) : [];
 
   const messages: ChatMessage[] = [
-    { role: "system", content: systemContent },
-    { role: "user", content: userContent },
+    { role: "system", content: sliceSystemPrompt(layer) },
+    { role: "user", content: sliceUserPrompt(layer, sliceName, segmentNames, filesSection, publicApiNames) },
   ];
 
   try {
     const raw = await chat(config.provider, messages, {
       responseFormat: {
         type: "json_schema",
-        json_schema: {
-          name: "dir_analysis",
-          schema: getDirAnalysisJsonSchema(),
-          strict: true,
-        },
+        json_schema: { name: "slice_analysis", schema: getSliceJsonSchema(), strict: true },
       },
     });
     const jsonStr = extractJsonFromModelResponse(raw);
-    const parsed = JSON.parse(jsonStr) as unknown;
-    return DirAnalysisSchema.parse(parsed) as DirAnalysis;
+    return SliceAnalysisSchema.parse(JSON.parse(jsonStr)) as SliceAnalysis;
   } catch (err) {
     consola.warn(
-      `分析目录失败 [${dirPath}]，本次跳过缓存写入:`,
+      `分析切片失败 [${layer}/${sliceName}]:`,
       err instanceof Error ? err.message : String(err),
     );
     return null;
   }
 }
 
+// ── direct-layer analysis (app / shared) ────────────────────────
+
+async function analyzeDirectLayer(
+  node: FsdTreeNode,
+  config: CodeMetaConfig,
+): Promise<LayerDirectAnalysis | null> {
+  const layer = node.fsd.layer;
+  const segmentNames = getSegmentNodes(node).map((s) => s.name);
+  const filesSection = await buildFilesSection(node);
+
+  const messages: ChatMessage[] = [
+    { role: "system", content: directLayerSystemPrompt(layer) },
+    { role: "user", content: directLayerUserPrompt(layer, segmentNames, filesSection) },
+  ];
+
+  try {
+    const raw = await chat(config.provider, messages, {
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "layer_analysis", schema: getLayerDirectJsonSchema(), strict: true },
+      },
+    });
+    const jsonStr = extractJsonFromModelResponse(raw);
+    return LayerDirectAnalysisSchema.parse(JSON.parse(jsonStr)) as LayerDirectAnalysis;
+  } catch (err) {
+    consola.warn(
+      `分析层失败 [${layer}]:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+// ── orchestrator ────────────────────────────────────────────────
+
 export interface AnalyzeContext {
   config: CodeMetaConfig;
-  diffResult: DiffResult;
-  scanDirMap: Map<string, DirNode>;
+  diffResult: FsdDiffResult;
+  scanResult: FsdScanResult;
   cacheData: CacheData | null;
   onProgress?: (current: number, total: number, path: string) => void;
 }
 
+/**
+ * Run analysis on all targets, respecting FSD layer order (bottom-up: shared first).
+ */
 export async function runAnalyze(ctx: AnalyzeContext): Promise<CacheData> {
-  const { config, diffResult, scanDirMap, cacheData, onProgress } = ctx;
-  const ordered = topologicalOrder(diffResult.toAnalyze);
-  const layers = groupByDepthDesc(ordered);
-  let currentCache = cacheData;
-  const failedDirs: string[] = [];
-  let progress = 0;
-  const limit = pLimit(ANALYZE_BATCH_SIZE);
+  const { config, diffResult, scanResult, cacheData, onProgress } = ctx;
+  const targets = diffResult.toAnalyze;
 
-  for (const layer of layers) {
-    const analyzed = await Promise.all(
-      layer.map((dirPath) =>
+  const layerOrder: FsdLayer[] = ["shared", "entities", "features", "widgets", "pages", "app"];
+  const sorted = [...targets].sort((a, b) => {
+    const nodeA = scanResult.nodeMap.get(a);
+    const nodeB = scanResult.nodeMap.get(b);
+    const idxA = nodeA ? layerOrder.indexOf(nodeA.fsd.layer) : 99;
+    const idxB = nodeB ? layerOrder.indexOf(nodeB.fsd.layer) : 99;
+    if (idxA !== idxB) return idxA - idxB;
+    return a.localeCompare(b);
+  });
+
+  const limit = pLimit(CONCURRENCY);
+  let currentCache = cacheData;
+  const failedPaths: string[] = [];
+  let progress = 0;
+
+  // Group by layer so we can process bottom-up, one layer at a time
+  const byLayer = new Map<FsdLayer, string[]>();
+  for (const t of sorted) {
+    const node = scanResult.nodeMap.get(t);
+    if (!node) continue;
+    const layer = node.fsd.layer;
+    const list = byLayer.get(layer) ?? [];
+    list.push(t);
+    byLayer.set(layer, list);
+  }
+
+  for (const layer of layerOrder) {
+    const paths = byLayer.get(layer);
+    if (!paths?.length) continue;
+
+    const results = await Promise.all(
+      paths.map((targetPath) =>
         limit(async () => {
           progress++;
-          onProgress?.(progress, ordered.length, dirPath);
-          const node = scanDirMap.get(dirPath);
+          onProgress?.(progress, sorted.length, targetPath);
+
+          const node = scanResult.nodeMap.get(targetPath);
           if (!node) return null;
-          const analysis = await analyzeOneDirectory(
-            dirPath,
-            node,
-            config,
-            currentCache,
-          );
+
+          let analysis: AnalysisResult | null;
+          if (SLICED_LAYERS.has(layer) && node.kind === "slice") {
+            analysis = await analyzeSlice(node, config);
+          } else {
+            analysis = await analyzeDirectLayer(node, config);
+          }
+
           if (!analysis) {
-            failedDirs.push(dirPath);
+            failedPaths.push(targetPath);
             return null;
           }
-          return { dirPath, node, analysis } as const;
+          return { targetPath, node, analysis } as const;
         }),
       ),
     );
 
-    for (const item of analyzed) {
+    for (const item of results) {
       if (!item) continue;
-      currentCache = cache.updateCacheWithAnalysis(
+      currentCache = cache.updateCacheEntry(
         currentCache,
-        item.dirPath,
+        item.targetPath,
         item.node,
         item.analysis,
       );
     }
   }
 
-  if (currentCache == null) {
+  if (!currentCache) {
     const now = new Date().toISOString();
     currentCache = {
       version: cache.CACHE_VERSION,
       createdAt: now,
       updatedAt: now,
-      directories: {},
+      entries: {},
     };
   }
-  if (failedDirs.length > 0) {
-    consola.warn(`以下目录分析失败，后续运行会重试：${failedDirs.join(", ")}`);
+
+  if (failedPaths.length > 0) {
+    consola.warn(`以下目标分析失败，后续运行会重试：${failedPaths.join(", ")}`);
   }
+
   await cache.writeCache(currentCache);
   return currentCache;
 }

@@ -1,7 +1,7 @@
-import type { CodeMetaConfig } from "./src/core/config";
+import type { CodeMetaConfig } from "./src/core/types";
 
 export default {
-  include: ["src"],
+  srcRoot: "src",
   provider: {
     baseUrl:
       process.env.ARK_BASE_URL ?? "https://ark.cn-beijing.volces.com/api/v3",
@@ -9,5 +9,4 @@ export default {
     model: process.env.ARK_MODEL ?? "doubao-seed-1-8-251228",
     timeout: 90000,
   },
-  features: {},
 } satisfies CodeMetaConfig;

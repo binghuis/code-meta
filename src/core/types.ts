@@ -1,102 +1,73 @@
 /**
- * Shared type definitions for code-meta pipeline.
+ * Pipeline-level types for the FSD-aware code-meta tool.
  */
 
-/** File node in the scan tree (leaf). */
-export interface FileNode {
+import type {
+  AnalysisResult,
+  FsdLayer,
+  FsdPosition,
+} from "../fsd/types";
+
+// ── Scan ────────────────────────────────────────────────────────
+
+export interface FsdFileNode {
   kind: "file";
   name: string;
+  /** Path relative to project root, e.g. "src/features/cart/ui/Button.tsx". */
   path: string;
+  fsd: FsdPosition;
   md5: string;
   size: number;
-  mtimeMs: number;
   lines: number;
+  mtimeMs: number;
 }
 
-/** Directory node in the scan tree (has children). */
-export interface DirNode {
-  kind: "dir";
+export interface FsdTreeNode {
+  kind: "layer" | "slice" | "segment";
   name: string;
   path: string;
+  fsd: FsdPosition;
   fingerprint: string;
-  children: TreeNode[];
-  /** Marked when directory is barrel-only, type-only, or very small. */
-  trivial?: TrivialReason;
+  children: Array<FsdTreeNode | FsdFileNode>;
 }
 
-export type TreeNode = FileNode | DirNode;
-
-export type TrivialReason =
-  | "barrel-only"
-  | "type-only"
-  | "too-small";
-
-/** Status of a directory after diffing scan vs cache. */
-export type DirStatus = "unchanged" | "modified" | "new" | "deleted";
-
-/** Per-directory diff result. */
-export interface DirDiff {
-  path: string;
-  status: DirStatus;
-  node?: DirNode;
+export interface FsdScanResult {
+  layers: Map<FsdLayer, FsdTreeNode>;
+  /** All slice / direct-layer paths that are analysis targets. */
+  analysisTargets: string[];
+  nodeMap: Map<string, FsdTreeNode>;
 }
 
-/** Result of diff stage: what to analyze, skip, or delete. */
-export interface DiffResult {
+// ── Diff ────────────────────────────────────────────────────────
+
+export type EntryStatus = "unchanged" | "modified" | "new" | "deleted";
+
+export interface FsdDiffResult {
   toAnalyze: string[];
   toSkip: string[];
   toDelete: string[];
 }
 
-/** Single file entry in AI analysis output. */
-export interface FileAnalysis {
-  name: string;
-  purpose: string;
-  exports: string[];
-}
+// ── Cache ───────────────────────────────────────────────────────
 
-/** Single subdir entry in AI analysis output. */
-export interface SubdirAnalysis {
-  name: string;
-  summary: string;
-}
-
-/** AI analysis output schema for one directory. */
-export interface DirAnalysis {
-  summary: string;
-  businessDomain: string;
-  scenarios: string[];
-  conventions: string[];
-  files: FileAnalysis[];
-  subdirs: SubdirAnalysis[];
-}
-
-/** Cached analysis for one directory. */
-export interface CachedDir {
+export interface CachedEntry {
+  kind: "slice" | "direct-layer";
+  layer: FsdLayer;
   fingerprint: string;
   analyzedAt: string;
-  analysis: DirAnalysis;
+  analysis: AnalysisResult;
   files: Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }>;
 }
 
-/** Feature rule content (directory + feature rules, cache). */
-export interface FeatureRuleContent {
-  description: string;
-  globs: string[];
-  body: string;
-}
-
-/** Root structure of .code-meta/cache.json */
 export interface CacheData {
   version: number;
   createdAt: string;
   updatedAt: string;
-  directories: Record<string, CachedDir>;
-  /** Feature analysis results; used by emit-only to avoid API calls. */
-  features?: Record<string, FeatureRuleContent>;
+  entries: Record<string, CachedEntry>;
 }
 
-/** LLM provider configuration (OpenAI-compatible). */
+// ── Config ──────────────────────────────────────────────────────
+
 export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
@@ -104,76 +75,61 @@ export interface ProviderConfig {
   timeout?: number;
 }
 
-/** Feature map entry from config. */
-export interface FeatureConfig {
-  globs: string[];
-  description?: string;
-}
-
-/** Skill output options: index.json + by-dir shards and SKILL.md. */
 export interface SkillConfig {
   outputDir?: string;
-  /** Index file name (default "index.json"). */
   indexFileName?: string;
-  /** Directory for per-top-level shard files (default "by-dir"). */
-  dirShardDir?: string;
+  shardDir?: string;
 }
 
-/** One directory entry in a shard (full detail). */
-export interface ProjectMetaDirEntry {
-  summary: string;
-  files: Array<{ path: string; purpose: string; exports: string[] }>;
-}
-
-/** Shard file content: dirPath -> full entry for one top-level segment. */
-export type ProjectMetaShard = Record<string, ProjectMetaDirEntry>;
-
-/** Lightweight index: dirPath -> summary + shard filename; consumed first, then load by-dir/{shard}. */
-export interface ProjectMetaIndex {
-  generatedAt: string;
-  directories: Record<string, { summary: string; shard: string }>;
-  features?: Record<string, FeatureRuleContent>;
-}
-
-/** Full code-meta configuration. */
 export interface CodeMetaConfig {
-  include?: string[];
+  srcRoot?: string;
   exclude?: string[];
   allowedExtensions?: string[];
   provider: ProviderConfig;
-  features?: Record<string, FeatureConfig>;
   skill?: SkillConfig;
 }
 
-/** Human override for a single directory (partial DirAnalysis). */
+// ── Overrides ───────────────────────────────────────────────────
+
 export interface OverrideEntry {
   summary?: string;
-  businessDomain?: string;
   scenarios?: string[];
   conventions?: string[];
-  files?: Array<{ name: string; purpose?: string; exports?: string[] }>;
-  subdirs?: Array<{ name: string; summary?: string }>;
+  segments?: Array<{ name: string; summary?: string }>;
 }
 
-/** Root structure of .code-meta/overrides.yaml */
 export type OverridesMap = Record<string, OverrideEntry>;
 
-/** Scan result: root of the tree + flat list of all dir paths for iteration. */
-export interface ScanResult {
-  root: DirNode | null;
-  /** Full scanned directory paths before target/depth filtering. */
-  allDirPaths: string[];
-  /** Scoped directory paths after target/depth filtering. */
-  dirPaths: string[];
-  dirMap: Map<string, DirNode>;
+// ── Emit ────────────────────────────────────────────────────────
+
+export interface IndexLayerEntry {
+  summary: string;
+  shard: string;
+  slices?: Array<{ name: string; summary: string }>;
 }
 
-/** Pipeline run options (CLI flags). */
+export interface ProjectMetaIndex {
+  generatedAt: string;
+  architecture: "fsd";
+  layers: Record<string, IndexLayerEntry>;
+}
+
+// ── Pipeline ────────────────────────────────────────────────────
+
 export interface PipelineOptions {
   targetPath?: string;
-  depth?: number;
   dryRun?: boolean;
   emitOnly?: boolean;
   force?: boolean;
   onProgress?: (current: number, total: number, path: string) => void;
+}
+
+export interface PipelineResult {
+  scanResult?: FsdScanResult;
+  diffResult?: FsdDiffResult;
+  cacheData?: CacheData;
+  dryRun?: boolean;
+  emitOnly?: boolean;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
 }

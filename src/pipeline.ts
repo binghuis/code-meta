@@ -1,38 +1,29 @@
 /**
- * Pipeline: scan -> diff -> analyze -> emit (with dry-run, emit-only, force).
+ * Pipeline: detect → scan → diff → analyze → emit.
  */
 
-import type { CacheData, DiffResult, PipelineOptions, ScanResult } from "./core/types";
+import type { CacheData, FsdDiffResult, FsdScanResult, PipelineOptions, PipelineResult } from "./core/types";
 import type { CachedFileMeta } from "./scan/scanner";
+
 import { consola } from "consola";
+
 import { loadConfig } from "./core/config";
+import { detectFsdStructure } from "./fsd/detect";
 import { scan } from "./scan/scanner";
 import { diff } from "./scan/differ";
 import { runAnalyze } from "./analyze/analyzer";
 import { emit } from "./emit/emitter";
 import { loadOverrides } from "./data/overrides";
 import { readCache, writeCache } from "./data/cache";
-import { analyzeFeatures } from "./analyze/features";
 
-export interface PipelineResult {
-  scanResult?: ScanResult;
-  diffResult?: DiffResult;
-  cacheData?: CacheData;
-  dryRun?: boolean;
-  emitOnly?: boolean;
-  /** Estimated token count for dry-run (input). */
-  estimatedInputTokens?: number;
-  /** Estimated token count for dry-run (output). */
-  estimatedOutputTokens?: number;
-}
+export type { PipelineResult };
 
 function buildCachedFileMetaIndex(cacheData: CacheData | null): Map<string, CachedFileMeta> {
   const index = new Map<string, CachedFileMeta>();
   if (!cacheData) return index;
-  for (const [dirPath, dirEntry] of Object.entries(cacheData.directories)) {
-    for (const [name, file] of Object.entries(dirEntry.files)) {
-      const relPath = dirPath === "." ? name : `${dirPath}/${name}`;
-      index.set(relPath, {
+  for (const [, entry] of Object.entries(cacheData.entries)) {
+    for (const [name, file] of Object.entries(entry.files)) {
+      index.set(name, {
         md5: file.md5,
         size: file.size,
         mtimeMs: file.mtimeMs,
@@ -50,54 +41,59 @@ export async function runPipeline(
   const overrides = await loadOverrides();
   const {
     targetPath,
-    depth,
     dryRun = false,
     emitOnly = false,
     force = false,
     onProgress,
   } = options;
 
+  const srcRoot = config.srcRoot ?? "src";
+
+  // ── emit-only: skip everything, just regenerate from cache ────
   if (emitOnly) {
     const cacheData = await readCache();
     if (!cacheData) {
       return { emitOnly: true };
     }
-    await emit({
-      config,
-      cacheData,
-      overrides,
-    });
+    await emit({ config, cacheData, overrides });
     return { cacheData, emitOnly: true };
   }
 
-  let cacheData = await readCache();
-  if (force) {
-    cacheData = null;
-  }
-  const cachedFileMeta = buildCachedFileMetaIndex(cacheData);
+  // ── detect FSD structure ──────────────────────────────────────
+  const fsdStructure = await detectFsdStructure(process.cwd(), srcRoot);
 
-  const scanResult = await scan({
+  // ── scan ──────────────────────────────────────────────────────
+  let cacheData = await readCache();
+  if (force) cacheData = null;
+
+  const cachedFileMeta = buildCachedFileMetaIndex(cacheData);
+  const scanResult: FsdScanResult = await scan({
     config,
+    fsdStructure,
     targetPath,
-    depth,
     cachedFileMeta,
   });
 
-  const scopedRun = targetPath != null || depth !== undefined;
-  const diffResult = diff(scanResult, cacheData, {
+  // ── diff ──────────────────────────────────────────────────────
+  const scopedRun = targetPath != null;
+  const diffResult: FsdDiffResult = diff(scanResult, cacheData, {
     force,
     allowDelete: !scopedRun,
   });
 
+  // ── dry-run ───────────────────────────────────────────────────
   if (dryRun) {
     let estimatedInput = 0;
     let estimatedOutput = 0;
-    for (const dirPath of diffResult.toAnalyze) {
-      const node = scanResult.dirMap.get(dirPath);
-      if (node && !node.trivial) {
-        const fileCount = node.children.filter((c) => c.kind === "file").length;
-        estimatedInput += Math.min(fileCount * 500, 15000);
-        estimatedOutput += 400;
+    for (const t of diffResult.toAnalyze) {
+      const node = scanResult.nodeMap.get(t);
+      if (node) {
+        const fileCount = node.children.filter((c) => c.kind === "file").length +
+          node.children
+            .filter((c) => c.kind === "segment")
+            .reduce((sum, seg) => sum + (seg as { children: unknown[] }).children.length, 0);
+        estimatedInput += Math.min(fileCount * 500, 15_000);
+        estimatedOutput += 500;
       }
     }
     return {
@@ -109,68 +105,38 @@ export async function runPipeline(
     };
   }
 
+  // ── delete stale entries ──────────────────────────────────────
   if (cacheData && diffResult.toDelete.length > 0) {
-    for (const dirPath of diffResult.toDelete) {
-      delete cacheData.directories[dirPath];
+    for (const p of diffResult.toDelete) {
+      delete cacheData.entries[p];
     }
   }
 
-  // 有变更且有 API Key：调 AI 分析
+  // ── analyze ───────────────────────────────────────────────────
   if (diffResult.toAnalyze.length > 0 && config.provider.apiKey) {
     cacheData = await runAnalyze({
       config,
       diffResult,
-      scanDirMap: scanResult.dirMap,
+      scanResult,
       cacheData,
       onProgress,
     });
-  // 有变更但无 API Key：无法分析，提前返回（避免产出过期元信息）
   } else if (diffResult.toAnalyze.length > 0 && !config.provider.apiKey) {
-    consola.warn("检测到代码变更但未配置 API Key，已跳过元信息生成以避免产出过期内容。");
+    consola.warn("检测到代码变更但未配置 API Key，已跳过分析。");
     if (cacheData && diffResult.toDelete.length > 0) {
-      await emit({
-        config,
-        cacheData,
-        overrides,
-      });
+      await emit({ config, cacheData, overrides });
       await writeCache(cacheData);
     }
-    return {
-      scanResult,
-      diffResult,
-      cacheData: cacheData ?? undefined,
-    };
-  // 无变更或已分析完：复用现有 cache
-  } else {
-    // cacheData 已由上文赋值，无需 readCache()
+    return { scanResult, diffResult, cacheData: cacheData ?? undefined };
   }
 
+  // ── emit ──────────────────────────────────────────────────────
   if (cacheData) {
-    await emit({
-      config,
-      cacheData,
-      overrides,
-    });
-
+    await emit({ config, cacheData, overrides });
     if (diffResult.toDelete.length > 0) {
       await writeCache(cacheData);
     }
-
-    const featureKeys = Object.keys(config.features ?? {});
-    if (featureKeys.length > 0) {
-      if (config.provider.apiKey) {
-        const featureContents = await analyzeFeatures(config);
-        cacheData.features = Object.fromEntries(featureContents);
-        await writeCache(cacheData);
-      } else if (!cacheData.features || Object.keys(cacheData.features).length === 0) {
-        consola.warn("未配置 API Key 且无 feature 缓存，已跳过 feature 元信息生成。");
-      }
-    }
   }
 
-  return {
-    scanResult,
-    diffResult,
-    cacheData: cacheData ?? undefined,
-  };
+  return { scanResult, diffResult, cacheData: cacheData ?? undefined };
 }

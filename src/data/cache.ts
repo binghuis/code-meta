@@ -1,27 +1,28 @@
 /**
- * Read/write .code-meta/cache.json with version migration.
+ * Cache read/write for FSD analysis results.
+ * Key is slice path or direct-layer path.
  */
 
-import type { CacheData, DirAnalysis, DirNode } from "../core/types";
+import type { CacheData, CachedEntry, FsdFileNode, FsdTreeNode } from "../core/types";
+import type { AnalysisResult } from "../fsd/types";
+
 import fs from "node:fs/promises";
 import path from "node:path";
+
+import { SLICED_LAYERS } from "../fsd/types";
 import { ROOT } from "../core/constants";
-const CACHE_DIR = ".code-meta";
-const CACHE_FILE = "cache.json";
-export const CACHE_VERSION = 1;
+
+export const CACHE_VERSION = 2;
 
 export function getCachePath(): string {
-  return path.join(ROOT, CACHE_DIR, CACHE_FILE);
+  return path.join(ROOT, ".code-meta", "cache.json");
 }
 
 export async function readCache(): Promise<CacheData | null> {
-  const cachePath = getCachePath();
   try {
-    const raw = await fs.readFile(cachePath, "utf8");
+    const raw = await fs.readFile(getCachePath(), "utf8");
     const data = JSON.parse(raw) as CacheData;
-    if (data.version !== CACHE_VERSION) {
-      return null;
-    }
+    if (data.version !== CACHE_VERSION) return null;
     return data;
   } catch {
     return null;
@@ -31,47 +32,58 @@ export async function readCache(): Promise<CacheData | null> {
 export async function writeCache(data: CacheData): Promise<void> {
   const cachePath = getCachePath();
   const dir = path.dirname(cachePath);
-  const tmpPath = path.join(dir, `${CACHE_FILE}.tmp`);
   await fs.mkdir(dir, { recursive: true });
-  const payload = { ...data, updatedAt: new Date().toISOString() };
-  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+
+  data.updatedAt = new Date().toISOString();
+  const tmpPath = cachePath + ".tmp";
+  await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), "utf8");
   await fs.rename(tmpPath, cachePath);
 }
 
-function filesFromNode(
-  node: DirNode,
+function collectFilesMeta(
+  node: FsdTreeNode,
 ): Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }> {
-  const out: Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }> = {};
-  for (const c of node.children) {
-    if (c.kind === "file") {
-      out[c.name] = { md5: c.md5, size: c.size, mtimeMs: c.mtimeMs, lines: c.lines };
+  const result: Record<string, { md5: string; size: number; mtimeMs?: number; lines?: number }> = {};
+
+  function walk(n: FsdTreeNode | FsdFileNode): void {
+    if (n.kind === "file") {
+      result[n.name] = { md5: n.md5, size: n.size, mtimeMs: n.mtimeMs, lines: n.lines };
+    } else {
+      for (const child of n.children) {
+        walk(child);
+      }
     }
   }
-  return out;
+  walk(node);
+  return result;
 }
 
-export function updateCacheWithAnalysis(
+export function updateCacheEntry(
   cache: CacheData | null,
-  dirPath: string,
-  node: DirNode,
-  analysis: DirAnalysis,
+  targetPath: string,
+  node: FsdTreeNode,
+  analysis: AnalysisResult,
 ): CacheData {
   const now = new Date().toISOString();
-  const entry = {
-    fingerprint: node.fingerprint,
-    analyzedAt: now,
-    analysis,
-    files: filesFromNode(node),
-  };
-  if (cache == null) {
-    return {
+  if (!cache) {
+    cache = {
       version: CACHE_VERSION,
       createdAt: now,
       updatedAt: now,
-      directories: { [dirPath]: entry },
+      entries: {},
     };
   }
-  cache.directories[dirPath] = entry;
-  cache.updatedAt = now;
+
+  const kind: CachedEntry["kind"] = SLICED_LAYERS.has(node.fsd.layer) ? "slice" : "direct-layer";
+
+  cache.entries[targetPath] = {
+    kind,
+    layer: node.fsd.layer,
+    fingerprint: node.fingerprint,
+    analyzedAt: now,
+    analysis,
+    files: collectFilesMeta(node),
+  };
+
   return cache;
 }
